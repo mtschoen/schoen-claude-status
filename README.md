@@ -30,7 +30,9 @@ available:
   `-1.3h` means you're projected to hit the cap before the window resets.
   The pace number turns yellow as a close-call warning when the green margin
   shrinks to within 5% of the window length (~15 minutes for the 5h window,
-  ~8.4h for the weekly window).
+  ~8.4h for the weekly window). Requires Anthropic's `rate_limits` payload
+  field — proxy setups (LiteLLM, gateways) typically don't surface it, so
+  these fields silently omit on those configurations.
 - **cost** — `cost.total_cost_usd` from Claude Code's payload (matches
   `/usage`, includes subagent spend).
 
