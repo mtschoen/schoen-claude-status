@@ -9,7 +9,7 @@ thresholds.
 
 ```
 [hostname] /path/to/cwd (branch)
-ctx: 183.7K / 1.00M (18.0%) | cache: 15.41M read / 207.4K new / 99% hit | 5h: 6% +0.4h | wk: 21% +9.7h | cost: $10.66
+ctx: 183.7K / 1.00M (18.0%) | cache: 15.41M read / 207.4K write / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | cost: $10.66
 ```
 
 ## What you see
@@ -20,7 +20,7 @@ ctx: 183.7K / 1.00M (18.0%) | cache: 15.41M read / 207.4K new / 99% hit | 5h: 6%
 available:
 
 - **ctx** — tokens used / context window size (used %).
-- **cache** — total cache read / total new cache writes / cache hit %, summed
+- **cache** — total cache reads / total cache writes / cache hit %, summed
   across the session transcript and any subagent transcripts. (Claude Code's
   stdin payload only carries per-turn cache data, so the script walks the
   JSONL files to get a session-wide number.)
