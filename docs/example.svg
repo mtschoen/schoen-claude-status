@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="80" viewBox="0 0 1000 80" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <rect width="100%" height="100%" rx="6" fill="#1e1e1e"/>
+  <text x="14" y="30" fill="#dcdcdc" xml:space="preserve">[my-laptop] ~/projects/example-app (feature/example)</text>
+  <text x="14" y="56" fill="#dcdcdc" xml:space="preserve">ctx: 183.7K / 1.00M (<tspan fill="#23d18b">18.0%</tspan>) | cache: 15.41M read / 207.4K new / <tspan fill="#23d18b">99%</tspan> hit | 5h: <tspan fill="#23d18b">6%</tspan> <tspan fill="#23d18b">+0.4h</tspan> | wk: <tspan fill="#23d18b">21%</tspan> <tspan fill="#23d18b">+9.7h</tspan> | cost: <tspan fill="#23d18b">$10.66</tspan></text>
+</svg>
