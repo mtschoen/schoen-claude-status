@@ -187,7 +187,7 @@ total_in = read_t + write_t + input_t
 cache_summary = ""
 if total_in > 0:
     hit_pct = read_t * 100 / total_in
-    cache_summary = f"cache: {CACHE_READ}{fmt(read_t)}{RESET} / {CACHE_WRITE}{fmt(write_t)}{RESET} / {_color_high_good(hit_pct, 90, 75)} hit"
+    cache_summary = f"{CACHE_READ}{fmt(read_t)}{RESET} / {CACHE_WRITE}{fmt(write_t)}{RESET} / {_color_high_good(hit_pct, 90, 75)} hit"
 
 # --- Cost ------------------------------------------------------------------
 cost = (d.get("cost") or {}).get("total_cost_usd") or 0
