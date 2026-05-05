@@ -139,7 +139,7 @@ elif ctx_used >= yellow_tokens:
 else:
     ctx_color = GREEN
 display_pct = 100.0 * ctx_used / window_size if window_size else 0.0
-context_summary = f"ctx: {fmt(ctx_used)} / {fmt(window_size)} ({ctx_color}{display_pct:.1f}%{RESET})"
+context_summary = f"{fmt(ctx_used)} / {fmt(window_size)} ({ctx_color}{display_pct:.1f}%{RESET})"
 
 # --- Cache hit (session-wide — stdin JSON only exposes current turn, so we
 # still walk the session transcript + every subagent JSONL to sum across all
@@ -193,7 +193,7 @@ if total_in > 0:
 cost = (d.get("cost") or {}).get("total_cost_usd") or 0
 if cost > 0:
     cost_color = RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
-    cost_summary = f"cost: {cost_color}${cost:.2f}{RESET}"
+    cost_summary = f"{cost_color}${cost:.2f}{RESET}"
 else:
     cost_summary = ""
 
