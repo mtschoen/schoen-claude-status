@@ -11,6 +11,9 @@
 #   5h, wk     green <75    yellow 75-90     red >=90
 #   cache hit  green >=90   yellow 75-90     red <75      (high-is-good)
 #   cost       green <$25   yellow $25-$50   red >=$50
+# Cache identity colors (no threshold, just for at-a-glance read/write distinction):
+#   cache read  teal  (256-color 38)
+#   cache write orange (256-color 208)
 # Compact = window − 33K-token buffer (Claude Code default as of 2026-05);
 # CLAUDE_AUTOCOMPACT_PCT_OVERRIDE wins if set.  Red is pinned 20K below
 # compact — enough headroom for 1-2 more turns.
@@ -51,6 +54,10 @@ RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
 GREEN = "\x1b[32m"
 RESET = "\x1b[0m"
+# Identity colors for cache read/write so labels can be dropped.  Subtle —
+# 256-color teal / orange — distinct from the threshold colors above.
+CACHE_READ = "\x1b[38;5;38m"
+CACHE_WRITE = "\x1b[38;5;208m"
 
 def fmt(n):
     if n >= 1_000_000: return f"{n/1_000_000:.2f}M"
@@ -180,7 +187,7 @@ total_in = read_t + write_t + input_t
 cache_summary = ""
 if total_in > 0:
     hit_pct = read_t * 100 / total_in
-    cache_summary = f"cache: {fmt(read_t)} read / {fmt(write_t)} write / {_color_high_good(hit_pct, 90, 75)} hit"
+    cache_summary = f"cache: {CACHE_READ}{fmt(read_t)}{RESET} / {CACHE_WRITE}{fmt(write_t)}{RESET} / {_color_high_good(hit_pct, 90, 75)} hit"
 
 # --- Cost ------------------------------------------------------------------
 cost = (d.get("cost") or {}).get("total_cost_usd") or 0
