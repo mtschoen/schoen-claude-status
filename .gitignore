@@ -1,2 +1,4 @@
 .claude/
 *.stackdump
+__pycache__/
+*.pyc
