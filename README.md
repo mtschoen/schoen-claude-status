@@ -10,53 +10,59 @@ thresholds.
 ```
 [hostname] /path/to/cwd (branch)
 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $10.66
+● opus reviewing diff      | 215.4K / 1.00M (21.5%) | 4.21M / 89.3K / 97% hit | $4.82 | 1m23s
+✓ sonnet exploring config  | 18.4K  / 200K  ( 9.2%) | 87.3K / 4.2K  / 95% hit | $0.21
+● haiku running tests      | 5.1K   / 200K  ( 2.6%) | 18.9K / 1.1K  / 84% hit | $0.04 | 8s
 ```
 
 ## What you see
 
 **Line 1** — hostname, current working directory, current git branch (if any).
 
-**Line 2** — pipe-separated metrics; fields are omitted when their data isn't
-available:
+**Line 2** — pipe-separated metrics with no inline labels (colors carry the
+identity); fields are omitted when their data isn't available:
 
-- **ctx** — tokens used / context window size (used %).
-- **cache** — total cache reads / total cache writes / cache hit %, summed
-  across the session transcript and any subagent transcripts. (Claude Code's
+- **Context** — `tokens / window (used %)`, e.g. `183.7K / 1.00M (18.0%)`.
+  Numerator and percent share the threshold color; denominator is mauve.
+- **Cache** — `reads / writes / hit %`, e.g. `15.41M / 207.4K / 99% hit`.
+  Reads are teal, writes are orange, hit % is threshold-colored. Summed
+  across the session transcript and any subagent transcripts (Claude Code's
   stdin payload only carries per-turn cache data, so the script walks the
-  JSONL files to get a session-wide number.)
-- **5h / wk** — your 5-hour and 7-day Claude Code rate-limit utilization. Each
-  is followed by a **pace projection** in absolute hours: `+0.4h` means
-  you're on track to finish the window with 24 minutes of compute headroom;
-  `-1.3h` means you're projected to hit the cap before the window resets.
-  The pace number turns yellow as a close-call warning when the green margin
-  shrinks to within 5% of the window length (~15 minutes for the 5h window,
-  ~8.4h for the weekly window). Requires Anthropic's `rate_limits` payload
-  field — proxy setups (LiteLLM, gateways) typically don't surface it, so
-  these fields silently omit on those configurations.
-- **cost** — `cost.total_cost_usd` from Claude Code's payload (matches
-  `/usage`, includes subagent spend).
+  JSONL files to get a session-wide number).
+- **Quota** — labeled `5h:` and `wk:`, your 5-hour and 7-day Claude Code
+  rate-limit utilization. Each is followed by a **pace projection** in
+  absolute hours: `+0.4h` means you're on track to finish the window with 24
+  minutes of compute headroom; `-1.3h` means you're projected to hit the cap
+  before the window resets. The pace number turns yellow as a close-call
+  warning when the green margin shrinks to within 5% of the window length
+  (~15 minutes for the 5h window, ~8.4h for the weekly window). Requires
+  Anthropic's `rate_limits` payload field — proxy setups (LiteLLM, gateways)
+  typically don't surface it, so these fields silently omit on those
+  configurations.
+- **Cost** — total session spend, e.g. `$10.66`. From `cost.total_cost_usd`
+  on Claude Code's payload (matches `/usage`, includes subagent spend).
 
 ## Color thresholds
 
-ctx thresholds gate on raw token counts (the underlying limits — 33K
+Context thresholds gate on raw token counts (the underlying limits — 33K
 compact buffer, 200K Opus-1M pricing boundary — are themselves token
 quantities, not fractions, so the gating compares tokens directly):
 
-| field        | green       | yellow      | red             |
-|--------------|-------------|-------------|-----------------|
-| ctx (200K)   | < 100K      | 100–147K    | ≥ 147K          |
-| ctx (1M)     | < 200K      | 200–947K    | ≥ 947K          |
-| cache hit    | ≥ 90%       | 75–90%      | < 75%           |
-| 5h / wk      | < 75%       | 75–90%      | ≥ 90%           |
-| cost         | < $25       | $25–$50     | ≥ $50           |
-| pace ±X.Yh   | > 5% margin | 0–5% margin | < 0             |
+| field          | green       | yellow      | red             |
+|----------------|-------------|-------------|-----------------|
+| context (200K) | < 100K      | 100–147K    | ≥ 147K          |
+| context (1M)   | < 200K      | 200–947K    | ≥ 947K          |
+| cache hit %    | ≥ 90%       | 75–90%      | < 75%           |
+| 5h / wk %      | < 75%       | 75–90%      | ≥ 90%           |
+| cost           | < $25       | $25–$50     | ≥ $50           |
+| pace ±X.Yh     | > 5% margin | 0–5% margin | < 0             |
 
-ctx red is computed as `(window_size − 33K compact buffer) − 20K margin`,
+Context red is computed as `(window_size − 33K compact buffer) − 20K margin`,
 giving ~1–2 turns of headroom before auto-compact fires. Set
 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1–100) to override the compact point,
 and the red band tracks it.
 
-ctx yellow is **token-anchored on 1M models** (200K, the boundary where
+Context yellow is **token-anchored on 1M models** (200K, the boundary where
 Opus 1M pricing doubles) and **fraction-anchored otherwise** (50%, where
 model accuracy starts to degrade — a fill-fraction signal, not a token
 target). The 1M case keeps the higher-cost zone visually distinct.
@@ -112,13 +118,18 @@ the agent panel.
 ### Per-agent status lines
 
 When `subagentStatusLine` is configured, each row in the agent panel below
-the prompt is replaced with a single line of `ctx | cache | cost`, computed
-by walking that agent's own JSONL transcript at
+the prompt is replaced with `<status icon> <model badge> <description> |
+context | cache | cost | elapsed`, computed by walking that agent's own
+JSONL transcript at
 `~/.claude/projects/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`.
+The status icon is colored (green ✓ complete, red ✗ failed, yellow ●
+running, mauve ○ queued); the model badge is magenta for Opus, cyan for
+Sonnet, blue for Haiku. Elapsed is dropped once the row reaches a terminal
+state.
 
-The same color thresholds apply per agent. Quota (`5h` / `wk`) is omitted —
-it's account-global, identical for every agent, so it would just clutter the
-panel. Cost is derived from per-Mtok rates (the per-task payload doesn't
+The same color thresholds apply per agent. The quota field is omitted —
+it's account-global, identical for every agent, so it would just clutter
+the panel. Cost is derived from per-Mtok rates (the per-task payload doesn't
 carry `cost.total_cost_usd`); accuracy is within a few percent of `/usage`
 for non-Opus-1M turns.
 
