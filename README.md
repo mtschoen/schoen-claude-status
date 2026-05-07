@@ -70,7 +70,24 @@ constants in the script if your scale differs.
 git clone https://github.com/mtschoen/schoen-claude-status.git ~/schoen-claude-status
 ```
 
-Then point Claude Code at it. In `~/.claude/settings.json`:
+Then wire both the lead and per-agent statuslines into `~/.claude/settings.json`.
+The repo ships an installer that does the JSON merge for you, preserving every
+other key:
+
+```sh
+# macOS / Linux / Git Bash
+~/schoen-claude-status/install.sh
+
+# Windows (cmd / PowerShell)
+%USERPROFILE%\schoen-claude-status\install.bat
+```
+
+It's idempotent — re-run any time and it'll just refresh the two `command`
+strings to point at the current checkout. Pass `--dry-run` to preview the
+merged JSON without writing.
+
+If you'd rather edit `~/.claude/settings.json` by hand, the equivalent block
+is:
 
 ```json
 {
@@ -85,9 +102,12 @@ Then point Claude Code at it. In `~/.claude/settings.json`:
 }
 ```
 
-The next render picks up the change — no restart needed. The
-`subagentStatusLine` block is optional; omit it to keep Claude Code's default
-`name · description · token count` rendering in the agent panel.
+Two scripts are needed because Claude Code dispatches `statusLine` to the lead
+session and `subagentStatusLine` to each row in the agent panel — wiring only
+one leaves the other half of the UI on the default rendering. The next render
+picks up the change with no restart needed. Omitting `subagentStatusLine`
+keeps Claude Code's default `name · description · token count` rendering in
+the agent panel.
 
 ### Per-agent status lines
 
