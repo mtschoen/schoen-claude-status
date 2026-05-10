@@ -252,6 +252,127 @@ def format_cost(cost):
     return f"{color}${cost:.2f}{RESET}"
 
 
+# --- Beacon (live progress signal from the active turn) -----------------
+_BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
+_BEACON_STALE_SECONDS = 300
+
+_BIAS_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", ".statusline-bias-cache.json"
+)
+_BIAS_CACHE_TTL_SECONDS = 60
+_CALIBRATION_MIN_PAIRS = 20
+
+
+def _walker_subcommand(subcommand, *args, timeout=2):
+    """Invoke a claude-walker subcommand. Return parsed JSON or None on any error."""
+    bin_path = _find_walker_binary()
+    if not bin_path:
+        return None
+    try:
+        result = subprocess.run(
+            [bin_path, subcommand, *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        return _json_loads(result.stdout)
+    except (ValueError, TypeError):
+        return None
+
+
+def format_beacon(session_id):
+    """Render the live beacon column for `session_id`.
+
+    Returns (rendered_str | None, beacon_dict | None). None means the
+    column should be hidden (no session, no beacon, kind=end, or walker
+    unavailable). Stale beacons (>5 min old) render as "⏱ stale Nm" in
+    red so the user can tell the agent has gone quiet on its own promise.
+    """
+    if not session_id:
+        return (None, None)
+    data = _walker_subcommand("beacons-latest", "--session-id", session_id)
+    if not data:
+        return (None, None)
+    beacon = data.get("beacon")
+    if not beacon or beacon.get("kind") == "end":
+        return (None, None)
+
+    age = data.get("age_seconds")
+    if age is not None and age > _BEACON_STALE_SECONDS:
+        minutes = max(0, int(age) // 60)
+        return (f"{RED}⏱ stale {minutes}m{RESET}", beacon)
+
+    drift = beacon.get("drift", "nominal")
+    color = _BEACON_DRIFT_COLOR.get(drift, RESET)
+    eta_seconds = beacon.get("eta_seconds") or 0
+    eta_min = max(1, int(eta_seconds // 60))
+    summary = (beacon.get("summary") or "")[:60]
+    return (f"{color}⏱ ~{eta_min}m · {summary}{RESET}", beacon)
+
+
+def _bias_factor_cached(period_seconds):
+    """Return (n_pairs, bias_factor) from beacons-history, file-cached.
+
+    Beacons-history walks the full fleet, so per-render calls are wasteful.
+    Cache TTL is short enough that fresh end-beacons influence the next
+    render without a manual flush.
+    """
+    try:
+        with open(_BIAS_CACHE_PATH, encoding="utf-8") as f:
+            c = json.load(f)
+        age = datetime.now(timezone.utc).timestamp() - c.get("computed_at_unix", 0)
+        if age < _BIAS_CACHE_TTL_SECONDS and c.get("period_seconds") == period_seconds:
+            return c.get("n_pairs", 0), c.get("bias_factor")
+    except (OSError, ValueError, KeyError):
+        pass
+
+    data = _walker_subcommand(
+        "beacons-history",
+        "--period", str(int(period_seconds)),
+        "--win-start", "0",
+        timeout=5,
+    )
+    if not data:
+        return 0, None
+    n_pairs = data.get("n_pairs", 0)
+    bias_factor = data.get("bias_factor")
+    try:
+        with open(_BIAS_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "computed_at_unix": datetime.now(timezone.utc).timestamp(),
+                    "period_seconds": period_seconds,
+                    "n_pairs": n_pairs,
+                    "bias_factor": bias_factor,
+                },
+                f,
+            )
+    except OSError:
+        pass
+    return n_pairs, bias_factor
+
+
+def format_calibrated_eta(raw_eta_seconds, period_seconds=604800):
+    """Render the calibrated-ETA line, or None if too few pairs to calibrate.
+
+    Multiplies `raw_eta_seconds` by a bias factor derived from a 7-day
+    median of (actual_elapsed / begin_eta) ratios across the user's fleet.
+    Gated on n_pairs >= 20 so a handful of outlier sessions can't bias
+    the figure on a fresh install.
+    """
+    if not raw_eta_seconds or raw_eta_seconds <= 0:
+        return None
+    n_pairs, bias = _bias_factor_cached(period_seconds)
+    if n_pairs < _CALIBRATION_MIN_PAIRS or bias is None:
+        return None
+    calibrated = float(raw_eta_seconds) * float(bias)
+    cal_min = max(1, int(calibrated // 60))
+    return f"~{cal_min}m calibrated ({float(bias):.1f}×)"
+
+
 # --- Quota (main script only) --------------------------------------------
 def _fmt_delta_hours(seconds):
     sign = "+" if seconds >= 0 else "-"
@@ -330,7 +451,10 @@ def _find_walker_binary():
         path = os.path.join(home, relative)
         if os.path.isfile(path):
             return path
-    for name in ("walker.exe", "walker"):
+    # Canonical install name (`claude-walker`) takes precedence over the
+    # legacy `walker` lookup so a system-installed binary wins over an old
+    # checkout that happens to be on PATH.
+    for name in ("claude-walker.exe", "claude-walker", "walker.exe", "walker"):
         which = shutil.which(name)
         if which:
             return which

@@ -36,6 +36,7 @@ from statusline_lib import (
     RESET,
     YELLOW,
     ctx_window_for_model,
+    format_beacon,
     format_cache,
     format_context,
     format_cost,
@@ -225,7 +226,12 @@ def _row_for_task(task, parent_transcript_path, session_id):
     badge = _model_badge(model_id)
     head_pieces = [p for p in (icon, badge, description) if p]
     head = " ".join(head_pieces)
+    # Beacon: walker globs `agent-<sid>.jsonl`, so the bare task_id is what
+    # the lookup expects (no `agent-` prefix on the caller's side).
+    beacon_str, _ = format_beacon(task_id)
     parts = [head] + [p for p in metric_parts if p]
+    if beacon_str:
+        parts.append(beacon_str)
     if elapsed:
         parts.append(elapsed)
     return {"id": task_id, "content": " | ".join(parts)}
