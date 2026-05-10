@@ -302,19 +302,25 @@ def _find_session_jsonl(session_id):
 
 
 def _find_begin_emitted_at(session_id):
-    """Scan the session's JSONL for the most recent kind=begin beacon and
-    return its ISO-8601 timestamp string, or None if not found.
+    """Scan the session's JSONL for a beacon-pacing anchor timestamp.
+
+    Returns the ISO-8601 timestamp of the most recent kind=begin beacon if
+    one exists. If no begin beacon was ever emitted (older sessions that
+    started pacing mid-stream with only `report` kinds), falls back to the
+    FIRST beacon of any kind — the moment the agent started self-pacing in
+    this session. Returns None if no beacons at all.
 
     Walker only exposes the LATEST beacon, but for the status line we want
-    the begin-time anchor to show "started at HH:MM (Nm elapsed)". Doing
-    the scan in Python keeps walker's surface stable; the cost is one
-    forward pass over the JSONL per render. JSONLs cap at single-digit MB
-    in practice, so the scan is sub-100ms even on big sessions.
+    a wall-clock anchor to show "started at HH:MM (Nm elapsed)". Doing the
+    scan in Python keeps walker's surface stable; the cost is one forward
+    pass over the JSONL per render. JSONLs cap at single-digit MB in
+    practice, so the scan is sub-100ms even on big sessions.
     """
     path = _find_session_jsonl(session_id)
     if not path:
         return None
     latest_begin_ts = None
+    first_any_ts = None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -342,11 +348,15 @@ def _find_begin_emitted_at(session_id):
                             beacon = _json_loads(match.group(1))
                         except (ValueError, TypeError):
                             continue
-                        if isinstance(beacon, dict) and beacon.get("kind") == "begin":
+                        if not isinstance(beacon, dict):
+                            continue
+                        if first_any_ts is None:
+                            first_any_ts = ts
+                        if beacon.get("kind") == "begin":
                             latest_begin_ts = ts
     except OSError:
         return None
-    return latest_begin_ts
+    return latest_begin_ts or first_any_ts
 
 
 def _format_clock_and_elapsed(begin_ts):
