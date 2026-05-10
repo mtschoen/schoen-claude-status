@@ -12,6 +12,13 @@ import socket
 import subprocess
 import sys
 
+# Force UTF-8 stdout regardless of the Windows console code page. Without
+# this, characters like `⏱` (U+23F1, used in the beacon column) crash with
+# UnicodeEncodeError on cp1252 stdout. errors="replace" is belt-and-braces
+# so a future non-encodable glyph degrades to "?" instead of crashing the
+# whole statusline.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from statusline_lib import (
     format_beacon,
     format_cache,
