@@ -83,6 +83,21 @@ def main():
     print(f"updated {settings_path}")
     print(f"  statusLine:         {main_command}")
     print(f"  subagentStatusLine: {subagent_command}")
+
+    # Optional native pace-walker (claude-walker). Pure speedup -- the Python
+    # fallback runs identically when it isn't found.
+    sys.path.insert(0, repo)
+    try:
+        from statusline_lib import _find_walker_binary  # noqa: E402
+        walker = _find_walker_binary()
+    except ImportError:
+        walker = None
+    if walker:
+        print(f"  walker (native):    {walker}")
+    else:
+        print("  walker (native):    not found -- using Python fallback")
+        print("                      build ~/claude-walker/cpp or set CLAUDE_WALKER_BIN to enable")
+
     print("Open a new Claude Code session (or trigger a render) to pick it up.")
     return 0
 

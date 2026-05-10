@@ -19,6 +19,8 @@ matches the main-script's accepted ~5-10% under-estimate for big-context Opus.
 import glob
 import json
 import os
+import shutil
+import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -253,11 +255,12 @@ def _fmt_delta_hours(seconds):
 _PACE_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".claude", ".statusline-pace-cache.json"
 )
-# Walking ~1500 JSONLs costs ~250ms on the typical fleet (orjson + 8-worker
-# ProcessPool over per-session groups). Statusline still fires many times per
-# render, so the cache stays -- but the TTL is tighter than the old 60s now
-# that the cold walk is 3x cheaper, so a usage spike shows in pace within 30s.
-_PACE_CACHE_TTL_SECONDS = 30
+# Cold pace walk costs ~250ms parallel-Python or ~95ms with the native
+# claude-walker. The cache stays because the statusline fires many times per
+# render, but at sub-100ms cold the TTL can stay tight: 15s means a usage
+# spike shows in the pace projection within ~15s without making cache misses
+# feel sluggish.
+_PACE_CACHE_TTL_SECONDS = 15
 
 
 def _pace_buckets_cached(period_seconds, win_start_unix):
@@ -290,6 +293,81 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
     except OSError:
         pass
     return trailing, window
+
+
+# Optional native walker (~/claude-walker, separate repo). Honors the
+# CLI/output contract documented in claude-walker/SPEC.md. Cuts the cold
+# pace walk from ~250ms parallel Python to ~80-180ms single-process; the
+# Python implementation below stays as the fallback when the binary isn't
+# present or fails for any reason.
+_WALKER_BIN_ENV = "CLAUDE_WALKER_BIN"
+
+
+def _find_walker_binary():
+    """Locate the optional native walker. Returns absolute path or None.
+
+    Search order: $CLAUDE_WALKER_BIN, the canonical claude-walker C++ build
+    location under $HOME, then PATH (in case the user installed it elsewhere).
+    """
+    override = os.environ.get(_WALKER_BIN_ENV)
+    if override and os.path.isfile(override):
+        return override
+    home = os.path.expanduser("~")
+    for relative in (
+        # MSVC multi-config (default on Windows)
+        os.path.join("claude-walker", "cpp", "build", "Release", "walker.exe"),
+        # Ninja/MinGW single-config on Windows
+        os.path.join("claude-walker", "cpp", "build", "walker.exe"),
+        # Single-config on Linux/macOS
+        os.path.join("claude-walker", "cpp", "build", "walker"),
+    ):
+        path = os.path.join(home, relative)
+        if os.path.isfile(path):
+            return path
+    for name in ("walker.exe", "walker"):
+        which = shutil.which(name)
+        if which:
+            return which
+    return None
+
+
+def _walk_pace_buckets_native(period_seconds, win_start_unix):
+    """Try the native walker. Returns (trailing, window) or None on any failure.
+
+    Per SPEC.md the binary either exits 0 with one JSON line on stdout or the
+    caller falls back -- so any non-zero exit, parse error, or missing field
+    drops cleanly to the Python implementation.
+    """
+    bin_path = _find_walker_binary()
+    if not bin_path:
+        return None
+    try:
+        out = subprocess.run(
+            [
+                bin_path,
+                "--period", str(int(period_seconds)),
+                "--win-start", repr(float(win_start_unix)),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    try:
+        data = json.loads(out.stdout)
+    except (ValueError, TypeError):
+        return None
+    trailing = data.get("trailing_usd")
+    window = data.get("window_usd")
+    if trailing is None or window is None:
+        return None
+    try:
+        return float(trailing), float(window)
+    except (TypeError, ValueError):
+        return None
 
 
 def _walk_session_group(paths, period_cutoff, win_start_unix):
@@ -370,8 +448,13 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
         Single-group walks run inline to skip ~150ms pool-startup tax.
 
     Expensive on the typical fleet (~150ms parallel, was ~750ms single-thread);
-    call via _pace_buckets_cached.
+    call via _pace_buckets_cached. The native claude-walker binary, if present,
+    runs the same walk in ~80-180ms and short-circuits this path entirely.
     """
+    native = _walk_pace_buckets_native(period_seconds, win_start_unix)
+    if native is not None:
+        return native
+
     home = os.path.expanduser("~")
     proj_root = os.path.join(home, ".claude", "projects")
     if not os.path.isdir(proj_root):
