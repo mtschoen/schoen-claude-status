@@ -283,6 +283,95 @@ def _walker_subcommand(subcommand, *args, timeout=2):
         return None
 
 
+import re as _re
+
+_BEACON_BLOCK_RE = _re.compile(
+    r"<progress-beacon>\s*(\{.*?\})\s*</progress-beacon>", _re.DOTALL
+)
+
+
+def _find_session_jsonl(session_id):
+    """Locate the JSONL transcript for `session_id` across project dirs."""
+    if not session_id:
+        return None
+    home = os.path.expanduser("~")
+    pattern = os.path.join(home, ".claude", "projects", "*", f"{session_id}.jsonl")
+    for path in glob.glob(pattern):
+        return path
+    return None
+
+
+def _find_begin_emitted_at(session_id):
+    """Scan the session's JSONL for the most recent kind=begin beacon and
+    return its ISO-8601 timestamp string, or None if not found.
+
+    Walker only exposes the LATEST beacon, but for the status line we want
+    the begin-time anchor to show "started at HH:MM (Nm elapsed)". Doing
+    the scan in Python keeps walker's surface stable; the cost is one
+    forward pass over the JSONL per render. JSONLs cap at single-digit MB
+    in practice, so the scan is sub-100ms even on big sessions.
+    """
+    path = _find_session_jsonl(session_id)
+    if not path:
+        return None
+    latest_begin_ts = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    evt = _json_loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(evt, dict) or evt.get("type") != "assistant":
+                    continue
+                ts = evt.get("timestamp")
+                if not ts:
+                    continue
+                msg = evt.get("message") or {}
+                content = msg.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for chunk in content:
+                    if not isinstance(chunk, dict) or chunk.get("type") != "text":
+                        continue
+                    text = chunk.get("text") or ""
+                    if "<progress-beacon>" not in text:
+                        continue
+                    for match in _BEACON_BLOCK_RE.finditer(text):
+                        try:
+                            beacon = _json_loads(match.group(1))
+                        except (ValueError, TypeError):
+                            continue
+                        if isinstance(beacon, dict) and beacon.get("kind") == "begin":
+                            latest_begin_ts = ts
+    except OSError:
+        return None
+    return latest_begin_ts
+
+
+def _format_clock_and_elapsed(begin_ts):
+    """Convert an ISO-8601 begin timestamp to "HH:MM (Nm)" using local time.
+
+    Returns None if the timestamp can't be parsed.
+    """
+    if not begin_ts:
+        return None
+    try:
+        # Python's fromisoformat accepts the trailing Z suffix on 3.11+.
+        normalized = begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        dt = datetime.fromisoformat(normalized)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
+    if elapsed < 0:
+        elapsed = 0
+    elapsed_min = max(0, int(elapsed) // 60)
+    return f"{local:%H:%M} ({elapsed_min}m)"
+
+
 def format_beacon(session_id):
     """Render the live beacon column for `session_id`.
 
@@ -310,6 +399,13 @@ def format_beacon(session_id):
     eta_seconds = beacon.get("eta_seconds") or 0
     eta_min = max(1, int(eta_seconds // 60))
     summary = (beacon.get("summary") or "")[:60]
+
+    # Show begin-anchor (start clock + elapsed) so the user can sanity-check
+    # ETA drift against wall time. If the JSONL scan can't find a begin, fall
+    # back to the legacy "~Nm · summary" shape.
+    anchor = _format_clock_and_elapsed(_find_begin_emitted_at(session_id))
+    if anchor:
+        return (f"{color}⏱ start {anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
     return (f"{color}⏱ ~{eta_min}m · {summary}{RESET}", beacon)
 
 
