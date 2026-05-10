@@ -34,12 +34,13 @@ except ImportError:
 # --- ANSI colors -----------------------------------------------------------
 RED = "\x1b[31m"
 YELLOW = "\x1b[33m"
+ORANGE = "\x1b[38;5;208m"        # mid-tier between yellow and red
 GREEN = "\x1b[32m"
 RESET = "\x1b[0m"
 # Identity colors (256-color) -- distinct from the threshold band so identity
 # never reads as a warning.
 CACHE_READ = "\x1b[38;5;38m"     # teal
-CACHE_WRITE = "\x1b[38;5;208m"   # orange
+CACHE_WRITE = ORANGE             # cache-write identity reuses the orange hue
 CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
 
 # --- Pricing ---------------------------------------------------------------
@@ -185,6 +186,7 @@ def walk_transcript(path, include_subagents=False):
 # --- Field formatters -----------------------------------------------------
 COMPACT_BUFFER_TOKENS = 33_000
 RED_MARGIN_TOKENS = 20_000
+ORANGE_THRESHOLD_1M_TOKENS = 500_000  # mid-band warning for 1M-context sessions
 
 
 def ctx_window_for_model(model_id):
@@ -198,8 +200,10 @@ def format_context(ctx_used, window_size, model_id=""):
     """`usedK / windowK (P.P%)` colored by token-anchored thresholds.
 
     Yellow at 200K for 1M models (Opus 1M pricing boundary), at 50% otherwise.
-    Red at `window_size - 33K compact buffer - 20K headroom`; tracks
-    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set.
+    1M models also get an orange mid-band at 500K so the huge yellow
+    span between the pricing boundary and auto-compact has a visible
+    midpoint cue. Red at `window_size - 33K compact buffer - 20K
+    headroom`; tracks CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set.
     """
     if window_size <= 0:
         return ""
@@ -215,6 +219,8 @@ def format_context(ctx_used, window_size, model_id=""):
     yellow_tokens = 200_000 if is_1m else window_size // 2
     if ctx_used >= red_tokens:
         ctx_color = RED
+    elif is_1m and ctx_used >= ORANGE_THRESHOLD_1M_TOKENS:
+        ctx_color = ORANGE
     elif ctx_used >= yellow_tokens:
         ctx_color = YELLOW
     else:
