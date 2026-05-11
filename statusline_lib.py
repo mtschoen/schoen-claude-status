@@ -366,6 +366,13 @@ def _find_beacon_anchors(session_id):
                             # begin's lifecycle (i.e., after the latest begin).
                             if latest_begin_ts is not None:
                                 latest_report_ts = ts
+                        elif kind == "end":
+                            # end closes the lifecycle. Any later reports
+                            # without a fresh begin are orphans — surface
+                            # them as "no begin" rather than carrying a stale
+                            # turn anchor across the turn boundary.
+                            latest_begin_ts = None
+                            latest_report_ts = None
     except OSError:
         return (None, None)
     return (latest_begin_ts, latest_report_ts)
