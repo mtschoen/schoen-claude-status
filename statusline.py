@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 
 # Force UTF-8 stdout regardless of the Windows console code page. Without
 # this, characters like `⏱` (U+23F1, used in the beacon column) crash with
@@ -31,6 +32,11 @@ from statusline_lib import (
 
 
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
+
+# Per-render spinner so the user can see when the status line refreshes even
+# if the rendered text is byte-identical. Derived from wall clock at 4Hz, so
+# consecutive renders ≥250ms apart almost always show different frames.
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 def _safe_write(path, text):
@@ -110,7 +116,8 @@ def main():
     beacon_summary, beacon_dict = format_beacon(session_id) if session_id else (None, None)
 
     # --- Assemble.
-    line1 = f"[{_hostname()}] {cwd}"
+    spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
+    line1 = f"{spinner} [{_hostname()}] {cwd}"
     branch = _git_branch(cwd)
     if branch:
         line1 = f"{line1} ({branch})"

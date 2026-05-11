@@ -301,26 +301,31 @@ def _find_session_jsonl(session_id):
     return None
 
 
-def _find_begin_emitted_at(session_id):
-    """Scan the session's JSONL for a beacon-pacing anchor timestamp.
+def _find_beacon_anchors(session_id):
+    """Scan the session's JSONL for two beacon anchors.
 
-    Returns the ISO-8601 timestamp of the most recent kind=begin beacon if
-    one exists. If no begin beacon was ever emitted (older sessions that
-    started pacing mid-stream with only `report` kinds), falls back to the
-    FIRST beacon of any kind — the moment the agent started self-pacing in
-    this session. Returns None if no beacons at all.
+    Returns (turn_anchor_ts, step_anchor_ts):
+      turn_anchor_ts — ISO-8601 timestamp of the most recent kind=begin beacon,
+        or None if the session never emitted one. Surfaced by the status line
+        as an explicit `no begin` error rather than silently anchoring to the
+        first non-begin beacon (that fallback masked agents skipping begin).
+      step_anchor_ts — ISO-8601 timestamp of the most recent kind=report
+        beacon that was emitted AFTER turn_anchor_ts. None if no report has
+        fired in the current lifecycle. Drives the "step HH:MM (Mm)" mid-turn
+        anchor so the user sees motion as the agent progresses through
+        sub-tasks within a turn.
 
     Walker only exposes the LATEST beacon, but for the status line we want
-    a wall-clock anchor to show "started at HH:MM (Nm elapsed)". Doing the
-    scan in Python keeps walker's surface stable; the cost is one forward
-    pass over the JSONL per render. JSONLs cap at single-digit MB in
-    practice, so the scan is sub-100ms even on big sessions.
+    wall-clock anchors. Doing the scan in Python keeps walker's surface
+    stable; the cost is one forward pass over the JSONL per render. JSONLs
+    cap at single-digit MB in practice, so the scan is sub-100ms even on
+    big sessions.
     """
     path = _find_session_jsonl(session_id)
     if not path:
-        return None
+        return (None, None)
     latest_begin_ts = None
-    first_any_ts = None
+    latest_report_ts = None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -350,13 +355,20 @@ def _find_begin_emitted_at(session_id):
                             continue
                         if not isinstance(beacon, dict):
                             continue
-                        if first_any_ts is None:
-                            first_any_ts = ts
-                        if beacon.get("kind") == "begin":
+                        kind = beacon.get("kind")
+                        if kind == "begin":
                             latest_begin_ts = ts
+                            # New begin resets the step anchor — any reports
+                            # before this begin belonged to a closed lifecycle.
+                            latest_report_ts = None
+                        elif kind == "report":
+                            # Only track reports that fall within the current
+                            # begin's lifecycle (i.e., after the latest begin).
+                            if latest_begin_ts is not None:
+                                latest_report_ts = ts
     except OSError:
-        return None
-    return latest_begin_ts or first_any_ts
+        return (None, None)
+    return (latest_begin_ts, latest_report_ts)
 
 
 def _format_clock_and_elapsed(begin_ts):
@@ -410,13 +422,14 @@ def format_beacon(session_id):
     eta_min = max(1, int(eta_seconds // 60))
     summary = (beacon.get("summary") or "")[:60]
 
-    # Show begin-anchor (start clock + elapsed) so the user can sanity-check
-    # ETA drift against wall time. If the JSONL scan can't find a begin, fall
-    # back to the legacy "~Nm · summary" shape.
-    anchor = _format_clock_and_elapsed(_find_begin_emitted_at(session_id))
-    if anchor:
-        return (f"{color}⏱ start {anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
-    return (f"{color}⏱ ~{eta_min}m · {summary}{RESET}", beacon)
+    turn_ts, step_ts = _find_beacon_anchors(session_id)
+    turn_anchor = _format_clock_and_elapsed(turn_ts)
+    step_anchor = _format_clock_and_elapsed(step_ts)
+    if turn_anchor and step_anchor:
+        return (f"{color}⏱ turn {turn_anchor} · step {step_anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
+    if turn_anchor:
+        return (f"{color}⏱ turn {turn_anchor} · ~{eta_min}m · {summary}{RESET}", beacon)
+    return (f"{RED}⏱ no begin · ~{eta_min}m · {summary}{RESET}", beacon)
 
 
 def _bias_factor_cached(period_seconds):
