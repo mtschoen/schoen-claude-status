@@ -16,170 +16,6 @@ Each phase commits in its own repo. Cross-repo coordination point: Phase 7 verif
 
 ---
 
-## Phase 1: Config helper (walker)
-
-Build the shared C++ helper that reads `~/.claude/walker-roots.json` and produces a deduped, existence-filtered vector of paths. Used by all three subcommands.
-
-### Task 1.1: Add `walker_roots.hpp` helper
-
-**Files:**
-- Create: `C:\Users\mtsch\claude-walker\cpp\walker_roots.hpp`
-
-- [x] **Step 1: Create the header**
-
-```cpp
-// Roots discovery: default root + extras from ~/.claude/walker-roots.json
-// + extras from CLI flags. Deduped via fs::canonical, filtered to
-// existing directories.
-//
-// Failure modes follow the SPEC contract:
-//   * Missing config file -> no extras (silent).
-//   * Malformed JSON -> stderr diagnostic, treat as no extras.
-//   * Listed path doesn't exist on disk -> skip silently (stderr).
-//   * canonical() fails (broken symlink etc) -> fall back to lexically_normal.
-
-#ifndef WALKER_ROOTS_HPP
-#define WALKER_ROOTS_HPP
-
-#include "common.hpp"
-
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <unordered_set>
-#include <vector>
-
-#include <simdjson.h>
-
-namespace walker {
-
-namespace fs = std::filesystem;
-namespace sj = simdjson;
-
-inline fs::path walker_config_path() {
-    const char* home = std::getenv("HOME");
-    if (!home) home = std::getenv("USERPROFILE");
-    if (home) return fs::path(home) / ".claude" / "walker-roots.json";
-    return fs::path(".claude/walker-roots.json");
-}
-
-// Parse extras from `~/.claude/walker-roots.json`. Returns empty vector on
-// any failure (with a stderr diagnostic for malformed JSON specifically).
-inline std::vector<fs::path> read_extra_roots_from_config() {
-    fs::path config = walker_config_path();
-    std::error_code ec;
-    if (!fs::exists(config, ec)) return {};
-
-    std::ifstream in(config);
-    if (!in) return {};
-    std::ostringstream buf;
-    buf << in.rdbuf();
-    std::string body = buf.str();
-    if (body.empty()) return {};
-
-    sj::ondemand::parser parser;
-    sj::padded_string padded(body);
-    sj::ondemand::document doc;
-    if (parser.iterate(padded).get(doc) != sj::SUCCESS) {
-        std::cerr << "walker: malformed " << config.string()
-                  << " -- ignoring extra roots\n";
-        return {};
-    }
-    sj::ondemand::object root;
-    if (doc.get_object().get(root) != sj::SUCCESS) {
-        std::cerr << "walker: " << config.string()
-                  << " is not a JSON object -- ignoring\n";
-        return {};
-    }
-
-    std::vector<fs::path> extras;
-    for (auto field : root) {
-        std::string_view key;
-        if (field.unescaped_key().get(key) != sj::SUCCESS) continue;
-        if (key != "extra_roots") continue;
-
-        sj::ondemand::array arr;
-        if (field.value().get_array().get(arr) != sj::SUCCESS) continue;
-
-        for (auto element : arr) {
-            std::string_view path_view;
-            if (element.get_string().get(path_view) != sj::SUCCESS) continue;
-            if (path_view.empty()) continue;
-            extras.emplace_back(std::string(path_view));
-        }
-    }
-    return extras;
-}
-
-// Resolve the effective root list:
-//   [primary] + cli_extras + (config extras if read_config)
-//   -> dedup via canonical
-//   -> filter to existing directories
-inline std::vector<fs::path> resolve_roots(
-    const fs::path& primary,
-    const std::vector<fs::path>& cli_extras,
-    bool read_config)
-{
-    std::vector<fs::path> all;
-    all.push_back(primary);
-    for (const auto& p : cli_extras) all.push_back(p);
-    if (read_config) {
-        for (const auto& p : read_extra_roots_from_config()) all.push_back(p);
-    }
-
-    std::vector<fs::path> result;
-    std::unordered_set<std::string> seen;
-    for (const auto& p : all) {
-        std::error_code ec;
-        if (!fs::exists(p, ec) || !fs::is_directory(p, ec)) {
-            if (&p != &all[0]) {  // primary is allowed to not exist; that's the empty-fleet case
-                std::cerr << "walker: extra root not a directory, skipping: "
-                          << p.string() << "\n";
-            }
-            continue;
-        }
-        fs::path canon = fs::canonical(p, ec);
-        if (ec) canon = p.lexically_normal();
-        std::string key = canon.string();
-        if (seen.insert(key).second) {
-            result.push_back(canon);
-        }
-    }
-    return result;
-}
-
-}  // namespace walker
-
-#endif  // WALKER_ROOTS_HPP
-```
-
-- [x] **Step 2: Verify it compiles**
-
-Run: `cd C:\Users\mtsch\claude-walker\cpp\build && cmake --build . --config Release`
-Expected: build succeeds (the header is only included from main.cpp / beacons.cpp later — this step verifies it's syntactically valid by inclusion in a test compile).
-
-Touch a no-op include to force re-link if needed:
-
-```bash
-# In a PowerShell window:
-echo "#include \"walker_roots.hpp\"" >> C:\Users\mtsch\claude-walker\cpp\common.hpp
-cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release
-# Then revert:
-git checkout C:\Users\mtsch\claude-walker\cpp\common.hpp
-```
-
-- [x] **Step 3: Commit (in claude-walker repo)**
-
-```bash
-cd C:\Users\mtsch\claude-walker
-git add cpp/walker_roots.hpp
-git commit -m "walker: add walker_roots.hpp config + dedup helper"
-```
-
----
-
 ## Phase 2: cost-mode multi-root
 
 Wire the resolver into `run_cost`.
@@ -189,7 +25,7 @@ Wire the resolver into `run_cost`.
 **Files:**
 - Modify: `C:\Users\mtsch\claude-walker\cpp\main.cpp` (Args struct + parse_args)
 
-- [ ] **Step 1: Update Args struct (replace lines 38-43)**
+- [x] **Step 1: Update Args struct (replace lines 38-43)**
 
 ```cpp
 struct Args {
@@ -202,7 +38,7 @@ struct Args {
 };
 ```
 
-- [ ] **Step 2: Add flag handling to parse_args (inside the loop at lines 52-75)**
+- [x] **Step 2: Add flag handling to parse_args (inside the loop at lines 52-75)**
 
 Insert before the final `else { die(... unknown flag ...) }` branch:
 
@@ -215,12 +51,12 @@ Insert before the final `else { die(... unknown flag ...) }` branch:
 
 (Keep the existing `--version`, `--projects-root`, etc. branches as they are.)
 
-- [ ] **Step 3: Build to verify it compiles**
+- [x] **Step 3: Build to verify it compiles**
 
 Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
 Expected: build succeeds.
 
-- [ ] **Step 4: Smoke-test that the new flags parse without error**
+- [x] **Step 4: Smoke-test that the new flags parse without error**
 
 Run: `C:\Users\mtsch\claude-walker\cpp\build\Release\walker.exe --period 86400 --win-start 0 --extra-projects-root C:\nonexistent --no-config`
 Expected: exit 0, one JSON line on stdout, `trailing_usd` and `window_usd` numeric (probably matching the current single-root totals since the extra is nonexistent — no behavior change yet).
@@ -230,7 +66,7 @@ Expected: exit 0, one JSON line on stdout, `trailing_usd` and `window_usd` numer
 **Files:**
 - Modify: `C:\Users\mtsch\claude-walker\cpp\main.cpp` (discover_groups at lines 282-345)
 
-- [ ] **Step 1: Change signature and loop body**
+- [x] **Step 1: Change signature and loop body**
 
 Replace the function (around lines 282-345). Show the full new body:
 
@@ -304,7 +140,7 @@ static GroupMap discover_groups(
 
 Note the only changes from the original: signature accepts `std::vector<fs::path>&`, and an outer `for (root : roots)` loop wraps the rest.
 
-- [ ] **Step 2: Update the include in main.cpp**
+- [x] **Step 2: Update the include in main.cpp**
 
 Add near the other includes at the top of `main.cpp`:
 
@@ -312,7 +148,7 @@ Add near the other includes at the top of `main.cpp`:
 #include "walker_roots.hpp"
 ```
 
-- [ ] **Step 3: Update run_cost (lines 437-507)**
+- [x] **Step 3: Update run_cost (lines 437-507)**
 
 Replace the `fs::path root = args.projects_root.value_or(default_projects_root());` line + the `GroupMap groups = discover_groups(root, earliest);` line with:
 
@@ -326,7 +162,7 @@ GroupMap groups = discover_groups(roots, earliest);
 
 (Everything else in run_cost is unchanged.)
 
-- [ ] **Step 4: Build**
+- [x] **Step 4: Build**
 
 Run: `cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release`
 Expected: build succeeds.
@@ -337,7 +173,7 @@ Existing conformance walks corpus via `--projects-root <CORPUS>`. With our chang
 
 But the conformance harness doesn't pass `--no-config` yet. If the dev machine has a `walker-roots.json`, conformance would now pick it up — which it shouldn't for fixture isolation. **Fix conformance first, then re-run.**
 
-- [ ] **Step 1: Patch conformance.py to always pass `--no-config`**
+- [x] **Step 1: Patch conformance.py to always pass `--no-config`**
 
 Modify: `C:\Users\mtsch\claude-walker\shared\conformance.py` — the `run_walker` function (around line 69):
 
@@ -364,7 +200,7 @@ def run_walker(binary: Path, meta: dict, projects_root: Path, extras: list[Path]
     return json.loads(line)
 ```
 
-- [ ] **Step 2: Run conformance against cpp**
+- [x] **Step 2: Run conformance against cpp**
 
 Run: `cd C:\Users\mtsch\claude-walker && python shared\conformance.py cpp`
 Expected: every fixture passes, aggregate passes. (`--no-config` should be a no-op when no walker-roots.json exists on the dev box, OR cause the file to be skipped if one does.)
