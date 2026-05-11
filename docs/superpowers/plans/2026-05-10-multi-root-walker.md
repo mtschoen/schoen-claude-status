@@ -25,7 +25,7 @@ Build the shared C++ helper that reads `~/.claude/walker-roots.json` and produce
 **Files:**
 - Create: `C:\Users\mtsch\claude-walker\cpp\walker_roots.hpp`
 
-- [ ] **Step 1: Create the header**
+- [x] **Step 1: Create the header**
 
 ```cpp
 // Roots discovery: default root + extras from ~/.claude/walker-roots.json
@@ -155,7 +155,7 @@ inline std::vector<fs::path> resolve_roots(
 #endif  // WALKER_ROOTS_HPP
 ```
 
-- [ ] **Step 2: Verify it compiles**
+- [x] **Step 2: Verify it compiles**
 
 Run: `cd C:\Users\mtsch\claude-walker\cpp\build && cmake --build . --config Release`
 Expected: build succeeds (the header is only included from main.cpp / beacons.cpp later — this step verifies it's syntactically valid by inclusion in a test compile).
@@ -170,7 +170,7 @@ cmake --build C:\Users\mtsch\claude-walker\cpp\build --config Release
 git checkout C:\Users\mtsch\claude-walker\cpp\common.hpp
 ```
 
-- [ ] **Step 3: Commit (in claude-walker repo)**
+- [x] **Step 3: Commit (in claude-walker repo)**
 
 ```bash
 cd C:\Users\mtsch\claude-walker
