@@ -256,6 +256,50 @@ def format_cost(cost):
 _BEACON_DRIFT_COLOR = {"nominal": GREEN, "moderate": YELLOW, "material": RED}
 _BEACON_STALE_SECONDS = 300
 
+# Drift thresholds. ratio = (elapsed_so_far + current_eta) / original_begin_eta.
+# Anchored on observed reality, not the agent's self-assessment — historical
+# data showed agents never self-reported moderate or material, even on
+# lifecycles that ended up 2-10× over the begin estimate (the lowballed-and-
+# kept-lowballing pattern). 30-min elapsed cap matches the original SKILL
+# guidance: long absolute durations are material regardless of ratio.
+_DRIFT_MODERATE_RATIO = 1.5
+_DRIFT_MATERIAL_RATIO = 2.0
+_DRIFT_MATERIAL_ELAPSED_SECONDS = 1800
+
+
+def _compute_objective_drift(begin_ts, begin_eta_seconds, current_eta_seconds):
+    """Classify drift from elapsed + current eta vs original begin eta.
+
+    Returns "nominal" / "moderate" / "material". Falls back to "nominal"
+    when inputs are insufficient (no begin anchor, no begin eta, or eta
+    not parseable) — better to under-color than to flash red on missing
+    data.
+    """
+    if not begin_ts or not begin_eta_seconds or begin_eta_seconds <= 0:
+        return "nominal"
+    try:
+        normalized = begin_ts.replace("Z", "+00:00") if begin_ts.endswith("Z") else begin_ts
+        begin_dt = datetime.fromisoformat(normalized)
+    except (ValueError, TypeError):
+        return "nominal"
+    if begin_dt.tzinfo is None:
+        begin_dt = begin_dt.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - begin_dt).total_seconds()
+    if elapsed < 0:
+        elapsed = 0
+    if elapsed > _DRIFT_MATERIAL_ELAPSED_SECONDS:
+        return "material"
+    try:
+        eta = float(current_eta_seconds or 0)
+    except (TypeError, ValueError):
+        eta = 0.0
+    ratio = (elapsed + max(0.0, eta)) / begin_eta_seconds
+    if ratio >= _DRIFT_MATERIAL_RATIO:
+        return "material"
+    if ratio >= _DRIFT_MODERATE_RATIO:
+        return "moderate"
+    return "nominal"
+
 _BIAS_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".claude", ".statusline-bias-cache.json"
 )
@@ -302,9 +346,9 @@ def _find_session_jsonl(session_id):
 
 
 def _find_beacon_anchors(session_id):
-    """Scan the session's JSONL for two beacon anchors.
+    """Scan the session's JSONL for the active lifecycle's anchors.
 
-    Returns (turn_anchor_ts, step_anchor_ts):
+    Returns (turn_anchor_ts, step_anchor_ts, begin_eta_seconds):
       turn_anchor_ts — ISO-8601 timestamp of the most recent kind=begin beacon,
         or None if the session never emitted one. Surfaced by the status line
         as an explicit `no begin` error rather than silently anchoring to the
@@ -314,6 +358,10 @@ def _find_beacon_anchors(session_id):
         fired in the current lifecycle. Drives the "step HH:MM (Mm)" mid-turn
         anchor so the user sees motion as the agent progresses through
         sub-tasks within a turn.
+      begin_eta_seconds — `eta_seconds` from the most recent kind=begin beacon,
+        used as the original-estimate denominator when the status line
+        computes objective drift from elapsed-vs-original. None if no begin
+        is in flight or it carried a non-positive eta.
 
     Walker only exposes the LATEST beacon, but for the status line we want
     wall-clock anchors. Doing the scan in Python keeps walker's surface
@@ -323,9 +371,10 @@ def _find_beacon_anchors(session_id):
     """
     path = _find_session_jsonl(session_id)
     if not path:
-        return (None, None)
+        return (None, None, None)
     latest_begin_ts = None
     latest_report_ts = None
+    latest_begin_eta = None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -361,6 +410,12 @@ def _find_beacon_anchors(session_id):
                             # New begin resets the step anchor — any reports
                             # before this begin belonged to a closed lifecycle.
                             latest_report_ts = None
+                            eta = beacon.get("eta_seconds")
+                            try:
+                                eta_val = float(eta) if eta is not None else 0.0
+                            except (TypeError, ValueError):
+                                eta_val = 0.0
+                            latest_begin_eta = eta_val if eta_val > 0 else None
                         elif kind == "report":
                             # Only track reports that fall within the current
                             # begin's lifecycle (i.e., after the latest begin).
@@ -373,9 +428,10 @@ def _find_beacon_anchors(session_id):
                             # turn anchor across the turn boundary.
                             latest_begin_ts = None
                             latest_report_ts = None
+                            latest_begin_eta = None
     except OSError:
-        return (None, None)
-    return (latest_begin_ts, latest_report_ts)
+        return (None, None, None)
+    return (latest_begin_ts, latest_report_ts, latest_begin_eta)
 
 
 def _format_clock_and_elapsed(begin_ts):
@@ -423,13 +479,13 @@ def format_beacon(session_id):
         minutes = max(0, int(age) // 60)
         return (f"{RED}⏱ stale {minutes}m{RESET}", beacon)
 
-    drift = beacon.get("drift", "nominal")
-    color = _BEACON_DRIFT_COLOR.get(drift, RESET)
     eta_seconds = beacon.get("eta_seconds") or 0
     eta_min = max(1, int(eta_seconds // 60))
     summary = (beacon.get("summary") or "")[:60]
 
-    turn_ts, step_ts = _find_beacon_anchors(session_id)
+    turn_ts, step_ts, begin_eta = _find_beacon_anchors(session_id)
+    drift = _compute_objective_drift(turn_ts, begin_eta, eta_seconds)
+    color = _BEACON_DRIFT_COLOR.get(drift, RESET)
     turn_anchor = _format_clock_and_elapsed(turn_ts)
     step_anchor = _format_clock_and_elapsed(step_ts)
     if turn_anchor and step_anchor:

@@ -61,7 +61,7 @@ def run_case(name, events, expected_begin, expected_report):
     original = statusline_lib._find_session_jsonl
     statusline_lib._find_session_jsonl = lambda _sid: tmp.name
     try:
-        begin_ts, report_ts = _find_beacon_anchors("ignored-sid")
+        begin_ts, report_ts, _begin_eta = _find_beacon_anchors("ignored-sid")
     finally:
         statusline_lib._find_session_jsonl = original
         os.unlink(tmp.name)

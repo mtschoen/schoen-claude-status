@@ -1,8 +1,9 @@
 # schoen-claude-status
 
-A two-line [Claude Code](https://claude.com/claude-code) statusline showing
+A multi-line [Claude Code](https://claude.com/claude-code) statusline showing
 context, session-wide cache hit %, 5-hour and weekly rate-limit usage with
-pace projection, and total session cost — all colored by configurable
+pace projection, total session cost, and (when a [progress-beacon](https://github.com/mtschoen/skills-progress-beacon)
+is active) a live ETA for the current turn — all colored by configurable
 thresholds.
 
 ![statusline example](docs/example.svg)
@@ -49,6 +50,55 @@ identity); fields are omitted when their data isn't available:
   TTL.
 - **Cost** — total session spend, e.g. `$10.66`. From `cost.total_cost_usd`
   on Claude Code's payload (matches `/usage`, includes subagent spend).
+
+**Line 3 (beacon)** — appears only when the agent has emitted a live
+[progress-beacon](https://github.com/mtschoen/skills-progress-beacon) for
+the current turn. Example:
+
+```
+⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
+```
+
+Field-by-field:
+
+- `⏱` — icon marker; a live beacon exists for the current turn.
+- `turn HH:MM (Nm)` — wall-clock time the `begin` beacon was emitted (the
+  start of the current turn) and minutes elapsed since. A *turn* is one
+  human prompt + the agent's full response to it; only your prompts open
+  a new turn. Internal thinking, tool calls, and `AskUserQuestion`
+  round-trips all stay within the same turn.
+- `step HH:MM (Nm)` — wall-clock time of the most recent `report` beacon
+  within this turn, and minutes since. The "I'm still working" anchor —
+  if `step` is many minutes old, the agent has gone heads-down without
+  checking in. Omitted before the first report fires.
+- `~Nm` — the agent's own estimate of wall-clock time remaining until
+  the **end of this turn** (not per-step). Read as "the agent thinks
+  it's ~5 minutes from done."
+- `summary` — the agent's one-line description of current work,
+  truncated to 60 chars.
+- `~Nm calibrated (X.Yx)` — the agent's `~Nm` multiplied by a bias
+  factor derived from the fleet's recent (begin, end) beacon pairs (7-day
+  median of `active_elapsed / begin_eta`, gated on n ≥ 20 pairs). Only
+  rendered when calibration data is available.
+
+The whole line is colored by **drift**, computed from observed wall-clock
+against the original begin estimate:
+`(elapsed_so_far + current_eta) / original_begin_eta`. Green = nominal
+(< 1.5×), yellow = moderate (1.5–2×), red = material (≥ 2× or elapsed
+> 30 min). This catches the lowballed-and-kept-lowballing pattern that
+the agent's own self-assessment couldn't flag. Two failure-mode
+renderings replace the normal layout when something is off:
+
+- `⏱ no begin · ~Nm · summary` (red) — a `report` fired without a
+  preceding `begin` for this turn. The figure may still be useful but
+  the wall-clock anchor is missing; the agent should emit a `begin`
+  in its next message.
+- `⏱ stale Nm` (red) — no beacon has been refreshed in 5+ minutes
+  during a live turn. The agent has gone heads-down on its own promise
+  to check in.
+
+When the agent emits an `end` beacon, line 3 disappears until the next
+turn opens a new beacon lifecycle.
 
 ## Color thresholds
 
@@ -165,7 +215,8 @@ public in case it's useful. What it emphasizes:
   JSONLs (Claude Code's stdin payload only carries per-turn cache data).
 - **Single file** with no `jq` dependency — Python heredoc inside bash, no
   install step beyond `git clone`.
-- **Two-line layout** so the location row stays uncluttered.
+- **Layered layout** — location row stays uncluttered on line 1, metrics
+  on line 2, live turn ETA on line 3 only when a beacon is active.
 
 If you want progress bars, themes, or powerline glyphs,
 [ccstatusline](https://github.com/sirmalloc/ccstatusline) is great. If you
