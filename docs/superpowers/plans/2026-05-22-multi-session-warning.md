@@ -16,7 +16,7 @@
 - Modify: `statusline_lib.py` (append a new helper near the other module-level helpers)
 - Create: `scripts/verify_active_session_count.py`
 
-- [ ] **Step 1: Write the verify script (failing)**
+- [x] **Step 1: Write the verify script (failing)**
 
 Create `scripts/verify_active_session_count.py`:
 
@@ -94,12 +94,12 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Run script to verify it fails**
+- [x] **Step 2: Run script to verify it fails**
 
 Run: `python C:/Users/mtsch/schoen-claude-status/scripts/verify_active_session_count.py`
 Expected: `ImportError: cannot import name 'count_active_sessions' from 'statusline_lib'`
 
-- [ ] **Step 3: Implement the helper in `statusline_lib.py`**
+- [x] **Step 3: Implement the helper in `statusline_lib.py`**
 
 First, add `import time` to the stdlib imports at the top of the file (the current imports are `glob`, `json`, `os`, `shutil`, `subprocess`; insert `time` in alphabetical position). Then append the helper after the existing module-level helpers — a good landing spot is just before the `# --- Pricing` section, since the helper is independent of cost handling and groups naturally with other small utilities:
 
@@ -144,12 +144,12 @@ def count_active_sessions(transcript_path, now=None, window_seconds=_SESSION_WIN
         return 0
 ```
 
-- [ ] **Step 4: Run script to verify it passes**
+- [x] **Step 4: Run script to verify it passes**
 
 Run: `python C:/Users/mtsch/schoen-claude-status/scripts/verify_active_session_count.py`
 Expected: `OK: count_active_sessions behaves correctly across all cases`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git -C C:/Users/mtsch/schoen-claude-status add statusline_lib.py scripts/verify_active_session_count.py

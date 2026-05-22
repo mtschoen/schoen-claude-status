@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -42,6 +43,46 @@ RESET = "\x1b[0m"
 CACHE_READ = "\x1b[38;5;38m"     # teal
 CACHE_WRITE = ORANGE             # cache-write identity reuses the orange hue
 CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
+
+# --- Multi-session warning -------------------------------------------------
+# Detects other Claude Code sessions that have recently touched a JSONL in
+# the same project slug dir, so the statusline can warn the user at session
+# start that a second instance is running here.
+
+_SESSION_WINDOW_SECONDS = 300
+
+
+def count_active_sessions(transcript_path, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
+    """Return how many top-level *.jsonl files in the same project slug dir
+    have an mtime within the last `window_seconds`. The current session's
+    JSONL is included (its mtime gets bumped on every statusline render).
+
+    Returns 0 on any error (missing dir, permission denied, empty path).
+    Subagent JSONLs live in subdirectories and are not counted.
+    """
+    if not transcript_path:
+        return 0
+    slug_dir = os.path.dirname(transcript_path)
+    if not slug_dir:
+        return 0
+    cutoff = (now if now is not None else time.time()) - window_seconds
+    try:
+        count = 0
+        with os.scandir(slug_dir) as it:
+            for entry in it:
+                if not entry.name.endswith(".jsonl"):
+                    continue
+                if not entry.is_file():
+                    continue
+                try:
+                    if entry.stat().st_mtime >= cutoff:
+                        count += 1
+                except OSError:
+                    continue
+        return count
+    except OSError:
+        return 0
+
 
 # --- Pricing ---------------------------------------------------------------
 # (input_per_mtok, output_per_mtok). Cache read = 0.1x input; cache write =
