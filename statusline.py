@@ -21,6 +21,9 @@ import time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from statusline_lib import (
+    RED,
+    RESET,
+    count_active_sessions,
     format_beacon,
     format_cache,
     format_calibrated_eta,
@@ -118,6 +121,9 @@ def main():
     # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = f"{spinner} [{_hostname()}] {cwd}"
+    n_sessions = count_active_sessions(d.get("transcript_path") or "")
+    if n_sessions >= 2:
+        line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
     branch = _git_branch(cwd)
     if branch:
         line1 = f"{line1} ({branch})"

@@ -168,7 +168,7 @@ subagent, non-jsonl, and missing-dir cases."
 **Files:**
 - Modify: `statusline.py:75-132` (the `main()` function and its line1 assembly)
 
-- [ ] **Step 1: Update imports and main() to splice the label**
+- [x] **Step 1: Update imports and main() to splice the label**
 
 In `statusline.py`, add `RED`, `RESET`, and `count_active_sessions` to the existing import from `statusline_lib`:
 
@@ -212,7 +212,7 @@ Replace with:
         line1 = f"{line1} ({branch})"
 ```
 
-- [ ] **Step 2: Smoke-test against a synthetic payload**
+- [x] **Step 2: Smoke-test against a synthetic payload**
 
 The simplest smoke test is to pipe a minimal payload through `statusline.py` with a `transcript_path` pointing at a temp slug dir that has two fresh JSONLs. Run this from PowerShell:
 
@@ -241,7 +241,7 @@ $payload | python C:/Users/mtsch/schoen-claude-status/statusline.py
 
 Expected: line 1 has NO session label (count is 1, below the ≥2 threshold).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git -C C:/Users/mtsch/schoen-claude-status add statusline.py
