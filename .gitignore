@@ -1,4 +1,5 @@
-.claude/
+.claude/*
+!.claude/settings.json
 *.stackdump
 __pycache__/
 *.pyc
