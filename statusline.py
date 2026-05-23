@@ -121,7 +121,7 @@ def main():
     # --- Assemble.
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = f"{spinner} [{_hostname()}] {cwd}"
-    n_sessions = count_active_sessions(d.get("transcript_path") or "")
+    n_sessions = count_active_sessions(d.get("transcript_path") or "", cwd=cwd)
     if n_sessions >= 2:
         line1 = f"{line1} {RED}[{n_sessions} sessions]{RESET}"
     branch = _git_branch(cwd)

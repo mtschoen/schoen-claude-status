@@ -1,6 +1,10 @@
-"""Verify that `count_active_sessions` correctly counts recently-modified
-session JSONLs in a project slug dir, ignoring subagent subdirectories
-and stale files.
+"""Verify `count_active_sessions` and its classifier `_process_matches`.
+
+Covers two paths:
+  - Mtime fallback (no cwd passed): the original slug-dir scan.
+  - psutil classifier: pure-function tests of `_process_matches` with
+    synthesized (name, cmdline, cwd) inputs -- no live or mocked psutil
+    needed.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -11,7 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from statusline_lib import count_active_sessions
+from statusline_lib import count_active_sessions, _process_matches
 
 
 def touch(path, mtime):
@@ -20,10 +24,8 @@ def touch(path, mtime):
     os.utime(path, (mtime, mtime))
 
 
-def main():
+def check_mtime_fallback(failures):
     now = time.time()
-    failures = []
-
     with tempfile.TemporaryDirectory() as slug_dir:
         transcript_path = os.path.join(slug_dir, "self.jsonl")
 
@@ -64,11 +66,64 @@ def main():
     if count_active_sessions("") != 0:
         failures.append("default now should still return 0 for empty path")
 
+
+def check_classifier(failures):
+    target = os.path.normcase("/home/user/proj")
+
+    # Positive cases
+    if not _process_matches("claude", ["claude"], "/home/user/proj", target):
+        failures.append("interactive claude in target cwd should match")
+    if not _process_matches("claude.exe", ["claude.exe"], "/home/user/proj", target):
+        failures.append("claude.exe in target cwd should match (Windows)")
+    if not _process_matches("node", ["node", "/path/to/claude/cli.js"], "/home/user/proj", target):
+        failures.append("node-wrapped claude should match")
+
+    # Negative: -p / --print headless mode (Task subagents, scripted)
+    if _process_matches("claude.exe", ["claude.exe", "-p", "--output-format", "json"], "/home/user/proj", target):
+        failures.append("-p subagent should NOT match")
+    if _process_matches("claude", ["claude", "--print", "hi"], "/home/user/proj", target):
+        failures.append("--print subagent should NOT match")
+
+    # Negative: wrong cwd
+    if _process_matches("claude", ["claude"], "/other/cwd", target):
+        failures.append("wrong cwd should NOT match")
+
+    # Negative: unrelated process name
+    if _process_matches("python", ["python", "script.py"], "/home/user/proj", target):
+        failures.append("non-claude process should NOT match")
+
+    # Negative: node without 'claude' in argv (regular Node app)
+    if _process_matches("node", ["node", "server.js"], "/home/user/proj", target):
+        failures.append("node without claude in argv should NOT match")
+
+    # Negative: empty / None cwd
+    if _process_matches("claude", ["claude"], "", target):
+        failures.append("empty cwd should NOT match")
+    if _process_matches("claude", ["claude"], None, target):
+        failures.append("None cwd should NOT match")
+
+
+def check_psutil_dispatch(failures):
+    # When cwd is provided and psutil is available, the function delegates
+    # to the psutil path. We can't synthesize fake claude processes here
+    # without a heavier mocking setup, but we can verify the dispatch
+    # returns 0 cleanly for a cwd that no real claude is running in.
+    bogus_cwd = os.path.join(tempfile.gettempdir(), "definitely-not-a-claude-cwd-zzz")
+    if count_active_sessions("", cwd=bogus_cwd) != 0:
+        failures.append("psutil path with no matching processes should return 0")
+
+
+def main():
+    failures = []
+    check_mtime_fallback(failures)
+    check_classifier(failures)
+    check_psutil_dispatch(failures)
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         sys.exit(1)
-    print("OK: count_active_sessions behaves correctly across all cases")
+    print("OK: count_active_sessions + _process_matches behave correctly across all cases")
 
 
 if __name__ == "__main__":

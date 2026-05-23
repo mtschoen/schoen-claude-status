@@ -45,21 +45,86 @@ CACHE_WRITE = ORANGE             # cache-write identity reuses the orange hue
 CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
 
 # --- Multi-session warning -------------------------------------------------
-# Detects other Claude Code sessions that have recently touched a JSONL in
-# the same project slug dir, so the statusline can warn the user at session
-# start that a second instance is running here.
+# Detects other Claude Code sessions running in the same cwd so the
+# statusline can warn that a second interactive instance is active here.
+#
+# Primary signal (when psutil is installed and cwd is known): enumerate
+# `claude` processes whose own cwd matches and which are not in `-p`
+# headless mode (Task subagents, scripted runs). Ground truth -- catches
+# idle sessions, ignores ones that cleanly /exit'd a moment ago.
+#
+# Fallback: count *.jsonl in the project slug dir with recent mtimes.
+# A session's final write at /exit also bumps mtime, so the fallback
+# false-positives for up to `_SESSION_WINDOW_SECONDS` after a clean exit.
+
+try:
+    import psutil
+    _HAVE_PSUTIL = True
+except ImportError:
+    psutil = None  # parse-time placeholder; runtime-guarded by _HAVE_PSUTIL.
+    _HAVE_PSUTIL = False
 
 _SESSION_WINDOW_SECONDS = 300
 
 
-def count_active_sessions(transcript_path, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
-    """Return how many top-level *.jsonl files in the same project slug dir
-    have an mtime within the last `window_seconds`. The current session's
-    JSONL is included (its mtime gets bumped on every statusline render).
+def count_active_sessions(transcript_path, cwd=None, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
+    """Return how many interactive Claude sessions are running in `cwd`.
 
-    Returns 0 on any error (missing dir, permission denied, empty path).
-    Subagent JSONLs live in subdirectories and are not counted.
+    When psutil is installed and `cwd` is provided, enumerates running
+    `claude` processes; otherwise falls back to a less-accurate mtime
+    scan of the slug dir. Returns 0 on any error.
     """
+    if _HAVE_PSUTIL and cwd:
+        try:
+            return _count_via_psutil(cwd)
+        except Exception:
+            # Fall through to mtime on unexpected psutil failure.
+            pass
+    return _count_via_mtime(transcript_path, now=now, window_seconds=window_seconds)
+
+
+def _process_matches(name, cmdline, cwd, target_cwd):
+    """Pure classifier: does this (name, cmdline, cwd) tuple represent an
+    interactive Claude session rooted at `target_cwd`? Extracted so unit
+    tests don't need a live or mocked psutil."""
+    n = (name or "").lower()
+    if n not in ("claude", "claude.exe", "node", "node.exe"):
+        return False
+    cl = cmdline or ()
+    if n in ("node", "node.exe") and not any(
+        "claude" in (arg or "").lower() for arg in cl
+    ):
+        return False
+    # -p / --print is the headless mode used by Task subagents and scripted runs.
+    if "-p" in cl or "--print" in cl:
+        return False
+    if not cwd:
+        return False
+    return os.path.normcase(cwd) == os.path.normcase(target_cwd)
+
+
+def _count_via_psutil(target_cwd):
+    count = 0
+    for p in psutil.process_iter(["name"]):
+        name = (p.info.get("name") or "").lower()
+        # Cheap name pre-filter -- avoids calling cmdline()/cwd() on every
+        # process (hundreds on a typical box).
+        if name not in ("claude", "claude.exe", "node", "node.exe"):
+            continue
+        try:
+            cmdline = p.cmdline()
+            pcwd = p.cwd()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if _process_matches(name, cmdline, pcwd, target_cwd):
+            count += 1
+    return count
+
+
+def _count_via_mtime(transcript_path, *, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
+    """Fallback: count top-level *.jsonl in the slug dir with mtime within
+    `window_seconds`. Subagent JSONLs (in subdirectories) are skipped.
+    Returns 0 on any error."""
     if not transcript_path:
         return 0
     slug_dir = os.path.dirname(transcript_path)
