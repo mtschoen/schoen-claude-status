@@ -36,6 +36,7 @@ from statusline_lib import (
 
 
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
+_ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
 
 # Per-render spinner so the user can see when the status line refreshes even
 # if the rendered text is byte-identical. Derived from wall clock at 4Hz, so
@@ -158,5 +159,26 @@ def main():
         sys.stdout.write("\n" + line3)
 
 
+def _log_error():
+    # Append a timestamped traceback so a crash leaves a forensic trail
+    # instead of a silent blank line. Claude Code hides stderr and shows
+    # nothing on nonzero exit, so without this any rare-input crash is
+    # invisible.
+    try:
+        import traceback
+        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            traceback.print_exc(file=f)
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_error()
+        try:
+            sys.stdout.write(f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log")
+        except Exception:
+            pass

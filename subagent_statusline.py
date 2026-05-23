@@ -46,6 +46,7 @@ from statusline_lib import (
 
 
 _INPUT_LOG = os.path.expanduser("~/.claude/.subagent-statusline-input.log")
+_ERROR_LOG = os.path.expanduser("~/.claude/.subagent-statusline-error.log")
 # Main statusline writes its latest payload here -- carries the authoritative
 # context_window_size, which the lead's transcript can't tell us (the JSONL
 # stores `claude-opus-4-7`, dropping the `[1m]` runtime tier suffix).
@@ -265,5 +266,22 @@ def main():
         out.write(json.dumps(row) + "\n")
 
 
+def _log_error():
+    # Match statusline.py's safety net: a crashing subagent renderer
+    # silently drops rows, so log the traceback for later forensics.
+    # NDJSON output schema is strict, so we don't emit a visible cue --
+    # the parent statusline carries the user-facing error indicator.
+    try:
+        import traceback
+        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            traceback.print_exc(file=f)
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_error()
