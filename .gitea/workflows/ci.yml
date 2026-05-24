@@ -23,3 +23,29 @@ jobs:
           python-version: '3.11'
       - name: Check syntax
         run: python -m py_compile statusline.py statusline_lib.py subagent_statusline.py install.py
+
+  test:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install optional runtime deps
+        # psutil is import-guarded in statusline_lib, but installing it lets the
+        # suite exercise the real process-enumeration path instead of the mtime
+        # fallback.
+        run: pip install psutil
+      - name: Run verification scripts
+        # Run every scripts/verify_*.py; collect failures so one bad script
+        # doesn't mask the others, then fail the job if any failed. (Don't rely
+        # on `set -e` aborting inside the loop -- track explicitly.)
+        run: |
+          fail=0
+          for t in scripts/verify_*.py; do
+            echo "=== $t ==="
+            python "$t" || fail=1
+          done
+          exit $fail

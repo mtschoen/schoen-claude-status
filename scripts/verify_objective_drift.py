@@ -32,46 +32,46 @@ def run_case(name, begin_minutes_ago, begin_eta_seconds, current_eta_seconds, ex
 def main():
     results = []
 
-    # Fresh begin, on-track: 0 elapsed + 300 eta = 300 / 300 = 1.0× → nominal
+    # Fresh begin, on-track: 0 elapsed + 300 eta = 300 / 300 = 1.0× -> nominal
     results.append(run_case(
         "on-track at begin", 0, 300, 300, "nominal"
     ))
 
-    # 2 min elapsed, 3 min remaining, original was 5 min: (120+180)/300 = 1.0× → nominal
+    # 2 min elapsed, 3 min remaining, original was 5 min: (120+180)/300 = 1.0× -> nominal
     results.append(run_case(
         "on-track mid-lifecycle", 2, 300, 180, "nominal"
     ))
 
-    # 5 min elapsed, 3 min remaining, original was 5 min: (300+180)/300 = 1.6× → moderate
+    # 5 min elapsed, 3 min remaining, original was 5 min: (300+180)/300 = 1.6× -> moderate
     results.append(run_case(
         "slipping moderately", 5, 300, 180, "moderate"
     ))
 
-    # 8 min elapsed, 3 min remaining, original was 5 min: (480+180)/300 = 2.2× → material
+    # 8 min elapsed, 3 min remaining, original was 5 min: (480+180)/300 = 2.2× -> material
     results.append(run_case(
         "slipping materially", 8, 300, 180, "material"
     ))
 
     # 35 min elapsed, original was 60 min, claims 5 min remaining: (2100+300)/3600 = 0.67×
-    # — would be nominal by ratio, but elapsed > 30min → material
+    # — would be nominal by ratio, but elapsed > 30min -> material
     results.append(run_case(
         "long absolute elapsed forces material", 35, 3600, 300, "material"
     ))
 
     # The lowballed-restated pattern: begin said 5 min, 25 min elapsed, agent
-    # still says "5 min remaining". (1500+300)/300 = 6× → material.
+    # still says "5 min remaining". (1500+300)/300 = 6× -> material.
     results.append(run_case(
         "lowballed-restated lies caught", 25, 300, 300, "material"
     ))
 
-    # Missing begin eta → fall back to nominal (don't flash red on no data)
+    # Missing begin eta -> fall back to nominal (don't flash red on no data)
     results.append(run_case(
-        "no begin eta → nominal fallback", 10, None, 60, "nominal"
+        "no begin eta -> nominal fallback", 10, None, 60, "nominal"
     ))
 
-    # Begin eta = 0 → fall back to nominal (avoid div-by-zero red)
+    # Begin eta = 0 -> fall back to nominal (avoid div-by-zero red)
     results.append(run_case(
-        "zero begin eta → nominal fallback", 10, 0, 60, "nominal"
+        "zero begin eta -> nominal fallback", 10, 0, 60, "nominal"
     ))
 
     if all(results):
