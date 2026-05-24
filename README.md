@@ -21,12 +21,10 @@ opus[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk:
 **Line 1** — hostname, current working directory, an optional red
 `[N sessions]` warning when two or more interactive Claude Code
 sessions are running in this cwd, and current git branch (if any).
-When `psutil` is installed (recommended), detection is process-based
-(enumerates `claude` processes whose cwd matches, excluding `-p`
-headless subagents) and the warning clears the moment the other
-session exits. Without `psutil`, the script falls back to a mtime
-scan of the project's transcript dir — less accurate, since a
-session that cleanly `/exit`'d still counts for up to 5 minutes.
+Detection enumerates `claude` processes whose cwd matches, excluding
+`-p` headless subagents, so the warning clears the moment the other
+session exits. Requires `psutil`; without it the badge stays off
+entirely (see [Requirements](#requirements)).
 
 **Line 2** — pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:
@@ -216,10 +214,9 @@ for non-Opus-1M turns.
   `model` / `session_id` / `cwd`).
 - Subagent statusline requires a Claude Code version that ships
   `subagentStatusLine` (see [docs](https://code.claude.com/docs/en/statusline#subagent-status-lines)).
-- Optional: `pip install psutil` for accurate multi-session detection
-  on line 1. Without it, the script falls back to an mtime heuristic
-  that can false-positive on recently-exited sessions; everything else
-  works identically.
+- Optional: `pip install psutil` enables the `[N sessions]` warning on
+  line 1. Without it the warning is suppressed; everything else works
+  identically.
 
 ## Why this and not [other-statusline]?
 

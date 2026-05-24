@@ -134,7 +134,7 @@ def main():
         line1 = f"{spinner} {ORANGE}LOCAL{RESET} [{_hostname()}] {cwd}"
     else:
         line1 = f"{spinner} [{_hostname()}] {cwd}"
-    raw_sessions = count_active_sessions(d.get("transcript_path") or "", cwd=cwd)
+    raw_sessions = count_active_sessions(cwd)
     # Suppress the brief 2-process overlap during a session restart (old process
     # still winding down as the new one starts) -- only badge a sustained count.
     n_sessions = debounce_session_count(raw_sessions, cwd)

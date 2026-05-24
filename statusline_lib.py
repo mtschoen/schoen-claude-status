@@ -48,14 +48,12 @@ CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
 # Detects other Claude Code sessions running in the same cwd so the
 # statusline can warn that a second interactive instance is active here.
 #
-# Primary signal (when psutil is installed and cwd is known): enumerate
-# `claude` processes whose own cwd matches and which are not in `-p`
-# headless mode (Task subagents, scripted runs). Ground truth -- catches
-# idle sessions, ignores ones that cleanly /exit'd a moment ago.
-#
-# Fallback: count *.jsonl in the project slug dir with recent mtimes.
-# A session's final write at /exit also bumps mtime, so the fallback
-# false-positives for up to `_SESSION_WINDOW_SECONDS` after a clean exit.
+# Enumerates `claude` processes whose own cwd matches and which are not in
+# `-p` headless mode (Task subagents, scripted runs). Ground truth -- catches
+# idle sessions, ignores ones that cleanly /exit'd a moment ago. Requires
+# `psutil`; without it the badge stays off entirely (any mtime-based
+# substitute false-positives for ~5 minutes after a clean /exit, which the
+# 20s restart-handoff debounce can't suppress).
 
 try:
     import psutil
@@ -64,23 +62,19 @@ except ImportError:
     psutil = None  # parse-time placeholder; runtime-guarded by _HAVE_PSUTIL.
     _HAVE_PSUTIL = False
 
-_SESSION_WINDOW_SECONDS = 300
 
-
-def count_active_sessions(transcript_path, cwd=None, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
+def count_active_sessions(cwd):
     """Return how many interactive Claude sessions are running in `cwd`.
 
-    When psutil is installed and `cwd` is provided, enumerates running
-    `claude` processes; otherwise falls back to a less-accurate mtime
-    scan of the slug dir. Returns 0 on any error.
+    Returns 0 when psutil is unavailable, `cwd` is empty, or any error
+    occurs -- never raises (statusline rendering must not crash).
     """
-    if _HAVE_PSUTIL and cwd:
-        try:
-            return _count_via_psutil(cwd)
-        except Exception:
-            # Fall through to mtime on unexpected psutil failure.
-            pass
-    return _count_via_mtime(transcript_path, now=now, window_seconds=window_seconds)
+    if not _HAVE_PSUTIL or not cwd:
+        return 0
+    try:
+        return _count_via_psutil(cwd)
+    except Exception:
+        return 0
 
 
 def _process_matches(name, cmdline, cwd, target_cwd):
@@ -119,34 +113,6 @@ def _count_via_psutil(target_cwd):
         if _process_matches(name, cmdline, pcwd, target_cwd):
             count += 1
     return count
-
-
-def _count_via_mtime(transcript_path, *, now=None, window_seconds=_SESSION_WINDOW_SECONDS):
-    """Fallback: count top-level *.jsonl in the slug dir with mtime within
-    `window_seconds`. Subagent JSONLs (in subdirectories) are skipped.
-    Returns 0 on any error."""
-    if not transcript_path:
-        return 0
-    slug_dir = os.path.dirname(transcript_path)
-    if not slug_dir:
-        return 0
-    cutoff = (now if now is not None else time.time()) - window_seconds
-    try:
-        count = 0
-        with os.scandir(slug_dir) as it:
-            for entry in it:
-                if not entry.name.endswith(".jsonl"):
-                    continue
-                if not entry.is_file():
-                    continue
-                try:
-                    if entry.stat().st_mtime >= cutoff:
-                        count += 1
-                except OSError:
-                    continue
-        return count
-    except OSError:
-        return 0
 
 
 # --- Multi-session badge debounce -----------------------------------------
