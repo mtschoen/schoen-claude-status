@@ -59,8 +59,15 @@ identity); fields are omitted when their data isn't available:
   window where the in-window denominator is too small to be meaningful. The
   walk is cached to `~/.claude/.statusline-pace-cache.json` with a 5-minute
   TTL.
-- **Cost** — total session spend, e.g. `$10.66`. From `cost.total_cost_usd`
-  on Claude Code's payload (matches `/usage`, includes subagent spend).
+- **Cost** — session spend. Rendered `($parent + $sub~) = $total` when subagents
+  ran, else just `$parent`. The parent figure is the harness's authoritative
+  `cost.total_cost_usd` (matches `/usage`), but it is PARENT-ONLY — subagents
+  run as isolated sessions invisible to the payload. `+ $sub~` is our own
+  formula's estimate of subagent spend, walked from the agent transcripts; the
+  trailing `~` is the estimate marker, grey when our formula tracks the harness
+  and tinted by drift direction/severity otherwise. `= $total` is their sum,
+  carrying its own higher color bands (see table) so a combined burn that
+  neither figure shows on its own still flags.
 
 **Line 3 (beacon)** — appears only when the agent has emitted a live
 [progress-beacon](https://github.com/mtschoen/skills-progress-beacon) for
@@ -123,7 +130,8 @@ quantities, not fractions, so the gating compares tokens directly):
 | context (1M)   | < 200K      | 200–500K    | 500–947K    | ≥ 947K          |
 | cache hit %    | ≥ 90%       | 75–90%      | —           | < 75%           |
 | 5h / wk %      | < 75%       | 75–90%      | —           | ≥ 90%           |
-| cost           | < $25       | $25–$50     | —           | ≥ $50           |
+| cost (each)    | < $25       | $25–$50     | —           | ≥ $50           |
+| cost (= $ sum) | < $35       | $35–$70     | —           | ≥ $70           |
 | pace ±X.Yh     | > 5% margin | 0–5% margin | —           | < 0             |
 
 Context red is computed as `(window_size − 33K compact buffer) − 20K margin`,

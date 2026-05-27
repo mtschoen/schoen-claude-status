@@ -439,6 +439,24 @@ def _cost_threshold_color(cost):
     return RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
 
 
+_SUM_COST_THRESHOLD_YELLOW = 35   # combined parent+subagent total >= this -> yellow
+_SUM_COST_THRESHOLD_RED = 70      # combined parent+subagent total >= this -> red
+
+
+def _sum_threshold_color(cost):
+    """Magnitude band for the combined parent+subagent total (the `= $total`
+    segment). Breakpoints sit higher than the per-figure bands
+    (_cost_threshold_color, 25/50): a total runs bigger than its parts, so
+    reusing 25/50 would peg the sum red on routine sessions. 35/70 splits the
+    difference -- it flags a combined burn that two individually-modest figures
+    can hide, without crying wolf."""
+    return (
+        RED if cost >= _SUM_COST_THRESHOLD_RED
+        else YELLOW if cost >= _SUM_COST_THRESHOLD_YELLOW
+        else GREEN
+    )
+
+
 def format_cost(cost):
     if cost is None or cost <= 0:
         return ""
@@ -471,9 +489,14 @@ _COST_DRIFT_MAJOR_THRESHOLD = 0.25                 # "way off"
 
 
 def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
-    """Render `$parent +$sub~`: authoritative parent + estimated subagent spend.
+    """Render `($parent + $sub~) = $total`: authoritative parent + estimated subagent
+    spend, then their sum.
 
-    Both figures carry the same magnitude bands (green/yellow/red). The parent is
+    The parent and subagent figures carry the same per-figure magnitude bands
+    (green/yellow/red via _cost_threshold_color). The trailing `= $total` is their
+    sum and carries its OWN, higher bands (_sum_threshold_color: green < $35,
+    yellow < $70, red >= $70) -- two individually-modest figures can add up to a
+    combined burn worth flagging that neither part shows alone. The parent is
     the harness's authoritative `total_cost_usd` (ground truth, but PARENT-ONLY
     -- subagents are invisible to it). The subagent figure is our formula's
     estimate, marked with a trailing "~".
@@ -506,10 +529,17 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
     else:                                                                    # under-estimate -> you may pay MORE
         tilde_color = _COST_DRIFT_UNDER_MAJOR_COLOR if major else _COST_DRIFT_UNDER_COLOR
     addend = (
-        f"{_cost_threshold_color(subagent_cost)}+${subagent_cost:.2f}{RESET}"
+        f"{_cost_threshold_color(subagent_cost)}+ ${subagent_cost:.2f}{RESET}"
         f"{tilde_color}~{RESET}"
     )
-    return f"{parent_part} {addend}" if parent_part else addend
+    body = f"{parent_part} {addend}" if parent_part else addend
+    # The sum is meaningful only when there's a parent figure to add to. With no
+    # authoritative parent (rare -- payload hasn't delivered a cost yet), `= $total`
+    # would just echo the subagent addend, so drop it but still surface the spend.
+    if not parent_part:
+        return body
+    total = authoritative_parent + subagent_cost
+    return f"({body}) {_sum_threshold_color(total)}= ${total:.2f}{RESET}"
 
 
 # --- Model badge ----------------------------------------------------------

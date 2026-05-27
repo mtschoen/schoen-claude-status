@@ -8,12 +8,15 @@ accurate cost without lying about what's measured vs estimated:
   * `walk_transcript` returns `parent_cost` / `subagent_cost` separately so the
     statusline can pair the authoritative parent figure with our subagent
     estimate.
-  * `format_cost_with_subagents` renders `$parent +$sub~`. Both numbers wear the
-    same magnitude bands (green/yellow/red). The trailing "~" is the estimate
-    marker, and ITS color is the drift signal -- grey when our formula tracks
-    the harness, else by direction + severity: over-estimate is cyan -> bright
-    pink past 25% (you pay less); under-estimate is orange -> deep red past 25%
-    (you may pay more). Drift never recolors the magnitude.
+  * `format_cost_with_subagents` renders `($parent + $sub~) = $total`. The parent and
+    subagent figures wear the same per-figure magnitude bands (green/yellow/red);
+    the trailing `= $total` is their sum and wears its OWN, higher bands (green <
+    $35, yellow < $70, red >= $70) so a combined burn neither part shows alone
+    still flags. The "~" is the estimate marker, and ITS color is the drift
+    signal -- grey when our formula tracks the harness, else by direction +
+    severity: over-estimate is cyan -> bright pink past 25% (you pay less);
+    under-estimate is orange -> deep red past 25% (you may pay more). Drift never
+    recolors any magnitude.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -99,14 +102,48 @@ def check(failures):
 
     # --- Subagent total carries the same magnitude bands as the main cost.
     green = format_cost_with_subagents(5.0, 5.0, 10.0)   # $10 -> green
-    if (GREEN + "+$10.00") not in green:
+    if (GREEN + "+ $10.00") not in green:
         failures.append("subagent total < $25 should be green")
     yellow = format_cost_with_subagents(5.0, 5.0, 30.0)  # $30 -> yellow
-    if (YELLOW + "+$30.00") not in yellow:
+    if (YELLOW + "+ $30.00") not in yellow:
         failures.append("subagent total in [$25,$50) should be yellow")
     red = format_cost_with_subagents(5.0, 5.0, 60.0)     # $60 -> red
-    if (RED + "+$60.00") not in red:
+    if (RED + "+ $60.00") not in red:
         failures.append("subagent total >= $50 should be red")
+
+    # --- The summed total carries its OWN, higher bands (green < $35, yellow <
+    #     $70, red >= $70) so a combined burn the parts hide individually flags.
+    sum_green = format_cost_with_subagents(5.0, 5.0, 10.0)     # total $15 -> green
+    if (GREEN + "= $15.00") not in sum_green:
+        failures.append("summed total < $35 should be green")
+    # Parts both green ($20 each) but their $40 sum lands in the yellow band.
+    sum_yellow = format_cost_with_subagents(20.0, 20.0, 20.0)  # total $40 -> yellow
+    if (YELLOW + "= $40.00") not in sum_yellow:
+        failures.append("summed total in [$35,$70) should be yellow")
+    # Parts both yellow ($40 each), but only the $80 sum crosses into red.
+    sum_red = format_cost_with_subagents(40.0, 40.0, 40.0)     # total $80 -> red
+    if (RED + "= $80.00") not in sum_red:
+        failures.append("summed total >= $70 should be red")
+    # The sum's bands are independent of the parts': here both parts are green
+    # ($20) yet the total is yellow -- proves the sum is not just echoing a part.
+    if (GREEN + "= $40.00") in sum_yellow:
+        failures.append("summed total must use its own bands, not the parts' bands")
+    # Discriminator: a $60 total is YELLOW under the sum bands (35/70) but would be
+    # RED under the per-figure bands (25/50). Proves _sum_threshold_color is used,
+    # not _cost_threshold_color -- the one case where the two band sets disagree.
+    sum_disc = format_cost_with_subagents(30.0, 30.0, 30.0)    # total $60
+    if (YELLOW + "= $60.00") not in sum_disc:
+        failures.append("summed $60 should be yellow (sum bands 35/70)")
+    if (RED + "= $60.00") in sum_disc:
+        failures.append("summed $60 must use sum bands (yellow), not per-figure bands (red)")
+
+    # --- No authoritative parent + subagent cost: show the addend, drop the
+    #     redundant sum (the `= $total` equation needs a parent to add to).
+    no_parent = format_cost_with_subagents(0.0, 0.0, 10.0)
+    if "+ $10.00" not in no_parent:
+        failures.append("no-parent case should still surface the subagent addend")
+    if "= $" in no_parent:
+        failures.append("no-parent case should drop the redundant sum segment")
 
     # --- "~" tracks the harness when there's no drift: neutral grey, no tints.
     if (_SUBAGENT_COST_COLOR + "~") not in green:
@@ -121,7 +158,7 @@ def check(failures):
     over_mod = format_cost_with_subagents(5.0, 5.0 * (1 + mod), 10.0)
     if (_COST_DRIFT_OVER_COLOR + "~") not in over_mod:
         failures.append("moderate over-estimate should tint '~' cyan")
-    if (GREEN + "+$10.00") not in over_mod:
+    if (GREEN + "+ $10.00") not in over_mod:
         failures.append("drift must not change the subagent magnitude color")
     if "↑" in over_mod or "↓" in over_mod:
         failures.append("drift indicator is the '~' color now, not an arrow")
