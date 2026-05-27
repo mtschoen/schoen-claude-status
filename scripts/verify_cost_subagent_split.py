@@ -11,9 +11,9 @@ accurate cost without lying about what's measured vs estimated:
   * `format_cost_with_subagents` renders `$parent +$sub~`. Both numbers wear the
     same magnitude bands (green/yellow/red). The trailing "~" is the estimate
     marker, and ITS color is the drift signal -- grey when our formula tracks
-    the harness, caution-orange when our PARENT estimate has diverged from the
-    authoritative figure. Drift never recolors the magnitude and never shows a
-    per-subagent claim (no ground truth exists for subagents).
+    the harness, else by direction + severity: over-estimate is cyan -> bright
+    pink past 25% (you pay less); under-estimate is orange -> deep red past 25%
+    (you may pay more). Drift never recolors the magnitude.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -34,8 +34,19 @@ from statusline_lib import (
     _cost_for_turn,
     _WEB_SEARCH_COST_USD,
     _COST_DRIFT_THRESHOLD,
-    _COST_DRIFT_COLOR,
+    _COST_DRIFT_MAJOR_THRESHOLD,
+    _COST_DRIFT_OVER_COLOR,
+    _COST_DRIFT_OVER_MAJOR_COLOR,
+    _COST_DRIFT_UNDER_COLOR,
+    _COST_DRIFT_UNDER_MAJOR_COLOR,
     _SUBAGENT_COST_COLOR,
+)
+
+_DRIFT_COLORS = (
+    _COST_DRIFT_OVER_COLOR,
+    _COST_DRIFT_OVER_MAJOR_COLOR,
+    _COST_DRIFT_UNDER_COLOR,
+    _COST_DRIFT_UNDER_MAJOR_COLOR,
 )
 
 
@@ -97,26 +108,46 @@ def check(failures):
     if (RED + "+$60.00") not in red:
         failures.append("subagent total >= $50 should be red")
 
-    # --- The "~" is the drift signal: grey when our formula tracks the harness.
+    # --- "~" tracks the harness when there's no drift: neutral grey, no tints.
     if (_SUBAGENT_COST_COLOR + "~") not in green:
         failures.append("no-drift '~' should be the neutral grey marker")
-    if _COST_DRIFT_COLOR in green:
-        failures.append("no-drift render should not use the drift color anywhere")
+    if any(c in green for c in _DRIFT_COLORS):
+        failures.append("no-drift render should not use any drift color")
 
-    # --- Under drift the "~" recolors; magnitude band is untouched; no arrow.
-    over = _COST_DRIFT_THRESHOLD + 0.10
-    drifted = format_cost_with_subagents(5.0, 5.0 * (1 + over), 10.0)
-    if (_COST_DRIFT_COLOR + "~") not in drifted:
-        failures.append("drift should tint the '~' marker")
-    if (GREEN + "+$10.00") not in drifted:
+    mod = _COST_DRIFT_THRESHOLD + 0.10           # moderate (between flag and major)
+    big = _COST_DRIFT_MAJOR_THRESHOLD + 0.10     # way off
+
+    # --- Over-estimate moderate -> cyan; magnitude untouched; no arrow.
+    over_mod = format_cost_with_subagents(5.0, 5.0 * (1 + mod), 10.0)
+    if (_COST_DRIFT_OVER_COLOR + "~") not in over_mod:
+        failures.append("moderate over-estimate should tint '~' cyan")
+    if (GREEN + "+$10.00") not in over_mod:
         failures.append("drift must not change the subagent magnitude color")
-    if "↑" in drifted or "↓" in drifted:
+    if "↑" in over_mod or "↓" in over_mod:
         failures.append("drift indicator is the '~' color now, not an arrow")
 
-    # --- Drift within threshold -> grey '~', no drift color.
-    under = _COST_DRIFT_THRESHOLD - 0.01
-    edge = format_cost_with_subagents(5.0, 5.0 * (1 + under), 10.0)
-    if _COST_DRIFT_COLOR in edge:
+    # --- Over-estimate WAY off -> bright pink (escalated past cyan).
+    over_big = format_cost_with_subagents(5.0, 5.0 * (1 + big), 10.0)
+    if (_COST_DRIFT_OVER_MAJOR_COLOR + "~") not in over_big:
+        failures.append("way-off over-estimate should tint '~' bright pink")
+    if _COST_DRIFT_OVER_COLOR in over_big:
+        failures.append("way-off over should escalate past cyan")
+
+    # --- Under-estimate moderate -> orange.
+    under_mod = format_cost_with_subagents(5.0, 5.0 * (1 - mod), 10.0)
+    if (_COST_DRIFT_UNDER_COLOR + "~") not in under_mod:
+        failures.append("moderate under-estimate should tint '~' orange")
+
+    # --- Under-estimate WAY off -> deep red (escalated past orange).
+    under_big = format_cost_with_subagents(5.0, 5.0 * (1 - big), 10.0)
+    if (_COST_DRIFT_UNDER_MAJOR_COLOR + "~") not in under_big:
+        failures.append("way-off under-estimate should tint '~' deep red")
+    if _COST_DRIFT_UNDER_COLOR in under_big:
+        failures.append("way-off under should escalate past orange")
+
+    # --- Drift within the flag threshold -> grey '~', no tint.
+    edge = format_cost_with_subagents(5.0, 5.0 * (1 + (_COST_DRIFT_THRESHOLD - 0.01)), 10.0)
+    if any(c in edge for c in _DRIFT_COLORS):
         failures.append("drift within threshold should not tint the marker")
 
 
@@ -127,7 +158,7 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print("OK: cost field bands both figures, charges web search, tints '~' on parent drift")
+    print("OK: cost field bands both figures, charges web search, tints '~' by drift direction + severity")
 
 
 if __name__ == "__main__":

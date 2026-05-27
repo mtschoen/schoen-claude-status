@@ -447,14 +447,27 @@ def format_cost(cost):
 
 # The subagent addend carries the same magnitude bands as the parent figure
 # (green/yellow/red via _cost_threshold_color). Its trailing "~" is the estimate
-# marker, and its COLOR is the drift signal: grey when our formula tracks the
-# harness, caution-orange when it has diverged. The drift threshold is tight --
-# our formula matches the harness's parent total_cost_usd to the penny in
-# practice, so even a few percent is a real signal (rate change, new cost
-# dimension) rather than noise.
-_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"   # grey -- the neutral "~" estimate marker
-_COST_DRIFT_COLOR = ORANGE                # caution "~", not error-red: our estimate diverged
-_COST_DRIFT_THRESHOLD = 0.04
+# marker, and its COLOR is the drift signal -- grey when our formula tracks the
+# harness, else tinted by the DIRECTION and SEVERITY of the divergence:
+#   under-estimate (our_parent < authoritative -- shown cost low, you may pay MORE):
+#     * moderate (> 4%):  caution-orange
+#     * way off  (> 25%): deep red -- a structural miss (rate hike, a new billed
+#       dimension we don't model yet, or 1M-tier doubling); you may be paying
+#       WAY more than shown.
+#   over-estimate (our_parent > authoritative -- shown cost high, you pay LESS):
+#     * moderate (> 4%):  cyan -- reassuring
+#     * way off  (> 25%): bright pink -- our estimate is wildly high (e.g. a rate
+#       CUT we haven't caught -- Anthropic dropped Opus 3x at 4.5); you're paying
+#       WAY less than shown.
+# Thresholds are tight because our formula matches the harness's parent
+# total_cost_usd to the penny in practice, so even a few percent is a real signal.
+_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"            # grey -- "~" tracks the harness
+_COST_DRIFT_UNDER_COLOR = ORANGE                   # under, moderate: you may pay MORE
+_COST_DRIFT_UNDER_MAJOR_COLOR = "\x1b[38;5;124m"   # under, way off: deep red
+_COST_DRIFT_OVER_COLOR = "\x1b[38;5;51m"           # over, moderate: cyan, you pay LESS
+_COST_DRIFT_OVER_MAJOR_COLOR = "\x1b[38;5;198m"    # over, way off: bright pink
+_COST_DRIFT_THRESHOLD = 0.04                       # flag at all
+_COST_DRIFT_MAJOR_THRESHOLD = 0.25                 # "way off"
 
 
 def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
@@ -467,12 +480,13 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
 
     The "~" closes the loop on drift. Drift is a PARENT-side measurement:
     `our_parent` is our formula over the same parent turns as the authoritative
-    figure, so a gap means our cost formula has diverged from the harness (a rate
-    change, a new cost dimension). We tint the estimate marker accordingly --
-    grey when our formula tracks the harness, caution-orange when it doesn't --
-    so the "~" reads as "estimated, and here's how much to trust that estimate."
-    It is deliberately NOT a per-subagent measurement (no ground truth exists for
-    subagents); it's a confidence tint on the estimate marker itself.
+    figure, so a gap means our cost formula has diverged from the harness. We
+    tint the estimate marker by the DIRECTION and SEVERITY of that gap: grey when
+    it tracks the harness; over-estimate (shown high, you pay less) is cyan,
+    escalating to bright pink past 25%; under-estimate (shown low, you may pay
+    more) is caution-orange, escalating to deep red past 25%. The same formula
+    produces the subagent figure, so the direction carries over; it is NOT a
+    per-subagent measurement (no ground truth exists for subagents).
 
     With no subagent cost the result is just the authoritative figure -- byte
     identical to the pre-subagent behavior.
@@ -483,9 +497,14 @@ def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
     drift = 0.0
     if authoritative_parent and authoritative_parent > 0:
         drift = (our_parent - authoritative_parent) / authoritative_parent
-    tilde_color = (
-        _COST_DRIFT_COLOR if abs(drift) > _COST_DRIFT_THRESHOLD else _SUBAGENT_COST_COLOR
-    )
+    magnitude = abs(drift)
+    major = magnitude > _COST_DRIFT_MAJOR_THRESHOLD
+    if magnitude <= _COST_DRIFT_THRESHOLD:
+        tilde_color = _SUBAGENT_COST_COLOR                                   # tracks the harness
+    elif drift > 0:                                                          # over-estimate -> you pay LESS
+        tilde_color = _COST_DRIFT_OVER_MAJOR_COLOR if major else _COST_DRIFT_OVER_COLOR
+    else:                                                                    # under-estimate -> you may pay MORE
+        tilde_color = _COST_DRIFT_UNDER_MAJOR_COLOR if major else _COST_DRIFT_UNDER_COLOR
     addend = (
         f"{_cost_threshold_color(subagent_cost)}+${subagent_cost:.2f}{RESET}"
         f"{tilde_color}~{RESET}"
