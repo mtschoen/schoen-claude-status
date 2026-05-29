@@ -6,6 +6,7 @@ and prints two lines:
 See README.md for layout, color thresholds, and install instructions.
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -199,9 +200,7 @@ if __name__ == "__main__":
         main()
     except Exception:
         _log_error()
-        try:
+        with contextlib.suppress(Exception):
             sys.stdout.write(
                 f"{RED}STATUSLINE ERROR{RESET} — see ~/.claude/.statusline-error.log"
             )
-        except Exception:
-            pass

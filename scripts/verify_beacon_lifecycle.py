@@ -52,10 +52,10 @@ def run_case(name, events, expected_begin, expected_report):
     # files into ~/.claude/projects.
     import statusline_lib
 
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         suffix=".jsonl", delete=False, mode="w", encoding="utf-8"
-    )
-    tmp.close()
+    ) as tmp:
+        pass
     write_jsonl(tmp.name, events)
 
     original = statusline_lib._find_session_jsonl

@@ -21,21 +21,12 @@ select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF"]
 #   - E402: statusline.py reconfigures stdout to UTF-8 before importing the
 #     shared lib, so module-level imports legitimately follow executable code.
 #   - E501: line length is not gated (ruff format handles wrapping).
-#   - SIM105 / UP042: judgment calls we don't enforce (try/except/pass reads
-#     fine in last-ditch error paths; UP042 churns enum bases for no win).
-#   - RUF001/RUF002/RUF003 (ambiguous '×' MULTIPLICATION SIGN): '×' is a
-#     deliberate typographic convention in this codebase. It is rendered in
-#     user-facing status-line output (e.g. the calibrated-ETA badge "(1.5×)")
-#     and echoed in the comments/docstrings that describe that output. Forcing
-#     ASCII 'x' would change what the user sees, so these rules are not gated.
-ignore = ["SIM105", "UP042", "RUF001", "RUF002", "RUF003"]
-
-[tool.ruff.lint.per-file-ignores]
-# scripts/verify_*.py are this repo's test suite. Allow common test idioms:
-#   SIM115  -- NamedTemporaryFile(delete=False) is intentional (the path must
-#              outlive the with-block so a subprocess can read it).
-#   the rest mirror the standard test-idiom allowances from the fleet gate.
-"scripts/**/*.py" = ["RUF012", "RUF043", "SIM117", "B017", "SIM115"]
+#
+# No rule-level ignores and no per-file-ignores: every finding the broad
+# select surfaces is FIXED rather than suppressed. The one unavoidable case
+# -- the '×' MULTIPLICATION SIGN that is rendered in the status line itself
+# -- carries a single targeted `# noqa: RUF001` at its one site in
+# statusline_lib.py, not a blanket rule ignore.
 
 [tool.ruff.format]
 # ruff format defaults: double quotes, 88-column wrap, trailing commas.

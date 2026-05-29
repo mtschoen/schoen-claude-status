@@ -22,6 +22,7 @@ doubling is NOT modeled because the harness does not apply it in practice:
 measured 0% error on 28 Opus sessions, including 26M-cache-read ones.
 """
 
+import contextlib
 import glob
 import json
 import os
@@ -467,10 +468,8 @@ def format_context(ctx_used, window_size, model_id=""):
     override = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
     compact_tokens = max(0, window_size - COMPACT_BUFFER_TOKENS)
     if override:
-        try:
+        with contextlib.suppress(ValueError):
             compact_tokens = int(window_size * float(override) / 100)
-        except ValueError:
-            pass
     red_tokens = max(0, compact_tokens - RED_MARGIN_TOKENS)
     is_1m = window_size >= 1_000_000 or "[1m]" in (model_id or "")
     yellow_tokens = 200_000 if is_1m else window_size // 2
@@ -662,7 +661,7 @@ _BEACON_STALE_SECONDS = 300
 # Drift thresholds. ratio = (elapsed_so_far + current_eta) / original_begin_eta.
 # Anchored on observed reality, not the agent's self-assessment — historical
 # data showed agents never self-reported moderate or material, even on
-# lifecycles that ended up 2-10× over the begin estimate (the lowballed-and-
+# lifecycles that ended up 2-10x over the begin estimate (the lowballed-and-
 # kept-lowballing pattern). 30-min elapsed cap matches the original SKILL
 # guidance: long absolute durations are material regardless of ratio.
 _DRIFT_MODERATE_RATIO = 1.5
@@ -967,7 +966,9 @@ def format_calibrated_eta(raw_eta_seconds, period_seconds=604800):
         return None
     calibrated = float(raw_eta_seconds) * float(bias)
     cal_min = max(1, int(calibrated // 60))
-    return f"~{cal_min}m calibrated ({float(bias):.1f}×)"
+    # The U+00D7 multiplication sign is deliberately rendered in the
+    # status-line ETA badge; ASCII 'x' would change user-facing output.
+    return f"~{cal_min}m calibrated ({float(bias):.1f}×)"  # noqa: RUF001
 
 
 # --- Quota (main script only) --------------------------------------------
