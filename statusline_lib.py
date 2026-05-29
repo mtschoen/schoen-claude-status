@@ -554,20 +554,31 @@ _MODEL_BADGES = [
 ]
 
 
-def format_model_badge(model_id):
-    """Colored short model-family badge, e.g. magenta `opus[1m]`.
+def _version_for(mid, key):
+    """Extract a dotted `major.minor` version following the family `key` in a
+    model id, e.g. `claude-opus-4-8` -> "4.8". Returns "" when no version
+    component is present (e.g. an aliased id like `opus`).
+    """
+    match = _re.search(rf"{key}-(\d+)-(\d+)", mid)
+    return f"{match.group(1)}.{match.group(2)}" if match else ""
 
-    Appends the `[1m]` runtime-tier suffix when present in the id. Unknown
-    families render as a mauve `?`; an empty id returns "" so the caller can
-    omit the segment.
+
+def format_model_badge(model_id):
+    """Colored short model-family badge, e.g. magenta `opus4.8[1m]`.
+
+    Inserts the `major.minor` version when the id carries one and appends the
+    `[1m]` runtime-tier suffix when present. Unknown families render as a mauve
+    `?`; an empty id returns "" so the caller can omit the segment.
     """
     if not model_id:
         return ""
     mid = model_id.lower()
     suffix = "[1m]" if "[1m]" in mid else ""
     for keys, label, color in _MODEL_BADGES:
-        if any(k in mid for k in keys):
-            return f"{color}{label}{suffix}{RESET}"
+        for key in keys:
+            if key in mid:
+                version = _version_for(mid, key)
+                return f"{color}{label}{version}{suffix}{RESET}"
     return f"{CTX_DENOM}?{RESET}"
 
 
