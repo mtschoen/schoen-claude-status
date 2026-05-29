@@ -1,7 +1,9 @@
 """Wire statusLine + subagentStatusLine into ~/.claude/settings.json.
 
 Idempotent: re-running just refreshes the two `command` strings; every other
-key in settings.json is preserved verbatim. Both entries are written together
+key in settings.json is preserved verbatim. If both entries already match what
+we'd write, it reports "already current" and exits without touching the file.
+Both entries are written together
 because the two scripts are paired -- the lead and per-agent renderings share
 formatting code, so installing one without the other gives a mismatched UI.
 
@@ -71,8 +73,26 @@ def main():
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 
-    settings["statusLine"] = {"type": "command", "command": main_command}
-    settings["subagentStatusLine"] = {"type": "command", "command": subagent_command}
+    desired_statusline = {"type": "command", "command": main_command}
+    desired_subagent = {"type": "command", "command": subagent_command}
+
+    already_current = (
+        settings.get("statusLine") == desired_statusline
+        and settings.get("subagentStatusLine") == desired_subagent
+    )
+
+    if already_current:
+        if args.dry_run:
+            print(f"# {settings_path} already current -- nothing to write")
+        else:
+            print(f"already current: {settings_path}")
+            print(f"  statusLine:         {main_command}")
+            print(f"  subagentStatusLine: {subagent_command}")
+            print("Nothing to do.")
+        return 0
+
+    settings["statusLine"] = desired_statusline
+    settings["subagentStatusLine"] = desired_subagent
 
     if args.dry_run:
         print(f"# would write to {settings_path}")
