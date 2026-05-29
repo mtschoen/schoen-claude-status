@@ -52,16 +52,31 @@ def main():
     repo = os.path.abspath(args.repo).replace("\\", "/")
     settings_path = args.settings or os.path.expanduser("~/.claude/settings.json")
 
-    main_script = f"{repo}/statusline-command.sh"
-    subagent_script = f"{repo}/subagent-statusline.sh"
-    for script in (main_script, subagent_script):
+    # On Windows, bare python/python3 resolve to the Microsoft Store alias shim,
+    # whose ~750ms per-invocation launch overhead dominated every render. Invoke
+    # the python.org build via the `py` launcher directly, skipping BOTH the
+    # Store shim AND the bash wrapper -- ~50-90ms faster and far less jittery
+    # than `bash statusline-command.sh` (Claude Code wraps the command in
+    # `cmd /c` on Windows, so no shell prefix is needed). `py -3` keeps it
+    # robust across Python minor upgrades -- no hard-coded interpreter path.
+    # On other platforms bash + python3 are already fast, so keep the portable
+    # shim (which itself prefers `py` where present -- see statusline-command.sh).
+    if os.name == "nt":
+        main_target = f"{repo}/statusline.py"
+        subagent_target = f"{repo}/subagent_statusline.py"
+        main_command = f'py -3 "{main_target}"'
+        subagent_command = f'py -3 "{subagent_target}"'
+    else:
+        main_target = f"{repo}/statusline-command.sh"
+        subagent_target = f"{repo}/subagent-statusline.sh"
+        main_command = f'bash "{main_target}"'
+        subagent_command = f'bash "{subagent_target}"'
+
+    for script in (main_target, subagent_target):
         if not os.path.exists(script):
             print(f"error: expected file not found: {script}", file=sys.stderr)
             print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
             return 1
-
-    main_command = f'bash "{main_script}"'
-    subagent_command = f'bash "{subagent_script}"'
 
     try:
         settings = _load(settings_path)

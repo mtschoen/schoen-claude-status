@@ -9,6 +9,7 @@ Covers:
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -22,10 +23,13 @@ def check_dispatch(failures):
     if count_active_sessions("") != 0:
         failures.append("empty cwd should return 0")
 
-    # A cwd that no real claude process is running in -> 0.
-    bogus_cwd = os.path.join(tempfile.gettempdir(), "definitely-not-a-claude-cwd-zzz")
-    if count_active_sessions(bogus_cwd) != 0:
-        failures.append("cwd with no matching claude processes should return 0")
+    # A cwd that no real claude process is running in -> 0. Use a throwaway cache
+    # path so the test never reads or writes the user's real session-count cache.
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_path = os.path.join(tmp, "sessioncount-cache.json")
+        bogus_cwd = os.path.join(tmp, "definitely-not-a-claude-cwd-zzz")
+        if count_active_sessions(bogus_cwd, cache_path=cache_path) != 0:
+            failures.append("cwd with no matching claude processes should return 0")
 
 
 def check_classifier(failures):
@@ -64,10 +68,43 @@ def check_classifier(failures):
         failures.append("None cwd should NOT match")
 
 
+def check_cache(failures):
+    """On-disk TTL memoization: a fresh entry is served from cache; an expired
+    one (or a future-stamped one, after a backwards clock jump) forces a re-scan.
+    Seed the cache directly so the expected value is deterministic and no live
+    `claude` process is required -- the seeded sentinel (42) could never come
+    from a real scan of an empty temp dir, so getting it back proves a cache hit.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_path = os.path.join(tmp, "sessioncount-cache.json")
+        cwd = os.path.join(tmp, "proj")
+        key = os.path.normcase(cwd)
+
+        def seed(count, ts):
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump({key: {"count": count, "ts": ts}}, f)
+
+        # Fresh entry within TTL -> served from cache.
+        seed(42, 1000)
+        if count_active_sessions(cwd, now=1001, cache_path=cache_path, ttl=8) != 42:
+            failures.append("fresh cache entry should be served without re-scanning")
+
+        # Entry older than TTL -> re-scan (no real process here -> 0).
+        seed(42, 1000)
+        if count_active_sessions(cwd, now=1009, cache_path=cache_path, ttl=8) != 0:
+            failures.append("expired cache entry should trigger a re-scan")
+
+        # Future-stamped entry (clock moved backwards) -> treated as a miss.
+        seed(42, 5000)
+        if count_active_sessions(cwd, now=1001, cache_path=cache_path, ttl=8) != 0:
+            failures.append("future-stamped cache entry should be ignored (clock-skew guard)")
+
+
 def main():
     failures = []
     check_dispatch(failures)
     check_classifier(failures)
+    check_cache(failures)
 
     if failures:
         for f in failures:

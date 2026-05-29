@@ -28,8 +28,12 @@ import os
 import shutil
 import subprocess
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
+
+# NOTE: concurrent.futures (ProcessPoolExecutor) is imported lazily inside the
+# only function that uses it (the multi-session parallel cost walk). Importing
+# it at module load dragged in all of `multiprocessing` -- ~26ms on every
+# statusline render, for a code path the per-render walk never touches.
 
 # orjson is 3-5x faster than stdlib json for the per-line parse that dominates
 # the pace walk. Optional -- the walker (and walk_transcript) fall back cleanly.
@@ -61,26 +65,91 @@ CTX_DENOM = "\x1b[38;5;139m"     # soft mauve
 # substitute false-positives for ~5 minutes after a clean /exit, which the
 # 20s restart-handoff debounce can't suppress).
 
-try:
-    import psutil
-    _HAVE_PSUTIL = True
-except ImportError:
-    psutil = None  # parse-time placeholder; runtime-guarded by _HAVE_PSUTIL.
-    _HAVE_PSUTIL = False
+# psutil is imported lazily (in _resolve_psutil), not at module load: on a
+# session-count cache hit -- the common case during a burst of renders -- we pay
+# neither its ~22ms import nor the ~18ms process scan.
+_psutil = None  # cached module handle within a process; None if unavailable.
 
 
-def count_active_sessions(cwd):
+def _resolve_psutil():
+    """Import psutil on first use; return the module, or None if unavailable."""
+    global _psutil
+    if _psutil is None:
+        try:
+            import psutil as module
+        except ImportError:
+            return None
+        _psutil = module
+    return _psutil
+
+
+# Process enumeration is the most expensive thing the statusline does per render
+# (~40ms incl. the psutil import). The count only changes when a Claude session
+# starts/stops in this cwd -- far slower than the render cadence -- so memoize it
+# on disk with a short TTL. This is NOT output caching: the badge is still
+# re-derived from this count + the live debounce every render; we only skip a
+# redundant OS scan whose answer cannot have changed within the TTL window.
+_SESSION_COUNT_CACHE_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", ".statusline-sessioncount-cache.json"
+)
+_SESSION_COUNT_CACHE_TTL_SECONDS = 8
+_SESSION_COUNT_CACHE_MAX_AGE_SECONDS = 86400  # prune entries older than a day
+
+
+def _load_session_count_cache(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_session_count_cache(path, cache, now):
+    pruned = {
+        k: v
+        for k, v in cache.items()
+        if isinstance(v, dict)
+        and (now - v.get("ts", 0)) <= _SESSION_COUNT_CACHE_MAX_AGE_SECONDS
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(pruned, f)
+    except OSError:
+        pass
+
+
+def count_active_sessions(cwd, *, now=None, cache_path=None,
+                          ttl=_SESSION_COUNT_CACHE_TTL_SECONDS):
     """Return how many interactive Claude sessions are running in `cwd`.
 
-    Returns 0 when psutil is unavailable, `cwd` is empty, or any error
-    occurs -- never raises (statusline rendering must not crash).
+    Memoized on disk for `ttl` seconds keyed by cwd. Returns 0 when psutil is
+    unavailable, `cwd` is empty, or any error occurs -- never raises (statusline
+    rendering must not crash).
     """
-    if not _HAVE_PSUTIL or not cwd:
+    if not cwd:
+        return 0
+    now = time.time() if now is None else now
+    path = cache_path or _SESSION_COUNT_CACHE_PATH
+    key = os.path.normcase(cwd)
+
+    cache = _load_session_count_cache(path)
+    entry = cache.get(key)
+    # Clock-skew guard: a future-stamped entry (now - ts < 0) is treated as a
+    # miss so a backwards clock jump can't pin a stale count indefinitely.
+    if isinstance(entry, dict) and 0 <= (now - entry.get("ts", 0)) < ttl:
+        return int(entry.get("count", 0))
+
+    psutil = _resolve_psutil()
+    if psutil is None:
         return 0
     try:
-        return _count_via_psutil(cwd)
+        count = _count_via_psutil(cwd, psutil)
     except Exception:
         return 0
+    cache[key] = {"count": count, "ts": now}
+    _save_session_count_cache(path, cache, now)
+    return count
 
 
 def _process_matches(name, cmdline, cwd, target_cwd):
@@ -103,7 +172,7 @@ def _process_matches(name, cmdline, cwd, target_cwd):
     return os.path.normcase(cwd) == os.path.normcase(target_cwd)
 
 
-def _count_via_psutil(target_cwd):
+def _count_via_psutil(target_cwd, psutil):
     count = 0
     for p in psutil.process_iter(["name"]):
         name = (p.info.get("name") or "").lower()
@@ -1190,6 +1259,10 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     workers = min(8, os.cpu_count() or 4)
     trailing = window_cost = 0.0
     try:
+        # Lazy import: pulls in multiprocessing (~26ms). Only paid here, on the
+        # rare >2-group parallel path -- never on a normal statusline render.
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = [
                 pool.submit(_walk_session_group, paths, period_cutoff, win_start_unix)
