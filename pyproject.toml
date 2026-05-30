@@ -24,7 +24,7 @@ select = ["F", "I", "B", "UP", "SIM", "RET", "PIE", "C4", "W", "RUF"]
 #
 # No rule-level ignores and no per-file-ignores: every finding the broad
 # select surfaces is FIXED rather than suppressed. The one unavoidable case
-# -- the '×' MULTIPLICATION SIGN that is rendered in the status line itself
+# -- the U+00D7 MULTIPLICATION SIGN glyph rendered in the status line itself
 # -- carries a single targeted `# noqa: RUF001` at its one site in
 # statusline_lib.py, not a blanket rule ignore.
 
