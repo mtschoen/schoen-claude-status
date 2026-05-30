@@ -79,6 +79,8 @@ def _safe_write(path, text):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
     except OSError:
+        # Best-effort write; a failed write is non-fatal and must not break
+        # the panel render.
         pass
 
 
@@ -265,6 +267,8 @@ def _log_error():
             f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             traceback.print_exc(file=f)
     except OSError:
+        # The error logger itself must never raise; nothing to do if the log
+        # file is unwritable.
         pass
 
 

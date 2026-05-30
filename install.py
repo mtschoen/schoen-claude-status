@@ -102,6 +102,8 @@ def main():
         )
         return 1
     except OSError as e:
+        # CLI error path: report to stderr and exit non-zero. Re-raising would
+        # dump a traceback at the user; returning 1 is the intended handling.
         print(f"error: could not read {settings_path}: {e}", file=sys.stderr)
         return 1
 

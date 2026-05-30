@@ -117,6 +117,8 @@ def _save_session_count_cache(path, cache, now):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(pruned, f)
     except OSError:
+        # Best-effort cache write; an unwritable/missing cache dir is non-fatal
+        # and must never break statusline rendering.
         pass
 
 
@@ -236,6 +238,7 @@ def _save_debounce_state(path, state, now):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(pruned, f)
     except OSError:
+        # Best-effort cache write; an unwritable cache dir is non-fatal.
         pass
 
 
@@ -411,6 +414,8 @@ def walk_transcript(path, include_subagents=False):
                     last_cache_create = w
                     last_cache_read = r
         except OSError:
+            # Transcript became unreadable mid-walk; use the totals gathered
+            # so far rather than failing the whole render.
             pass
 
     parent_cost = 0.0
@@ -947,6 +952,7 @@ def _bias_factor_cached(period_seconds):
                 f,
             )
     except OSError:
+        # Best-effort cache write; failure just means we recompute next time.
         pass
     return n_pairs, bias_factor
 
@@ -1016,6 +1022,7 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
                 f,
             )
     except OSError:
+        # Best-effort cache write; failure just means we recompute next time.
         pass
     return trailing, window
 
@@ -1081,13 +1088,17 @@ def _walker_root_list():
         if isinstance(extras, list):
             all_paths.extend(str(p) for p in extras if isinstance(p, str) and p)
     except FileNotFoundError:
+        # No extra-roots config file is the normal case; use the defaults.
         pass
     except (OSError, ValueError) as exc:
-        import sys
+        # A malformed config IS worth surfacing (unlike the missing-file case
+        # above); logging.warning routes to stderr even with no handler set.
+        import logging
 
-        print(
-            f"statusline_lib: ignoring malformed {_WALKER_ROOTS_CONFIG_PATH}: {exc}",
-            file=sys.stderr,
+        logging.getLogger(__name__).warning(
+            "statusline_lib: ignoring malformed %s: %s",
+            _WALKER_ROOTS_CONFIG_PATH,
+            exc,
         )
 
     seen = set()
