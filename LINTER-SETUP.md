@@ -77,3 +77,74 @@ Runs `ruff` on each edited `.py` and feeds findings back so they're fixed immedi
 projdash did exactly this in three stacked PRs — **#113** (autofix sweep), **#115**
 (real fixes), **#116** (bake the gate) — as the worked example. Auto-fix-and-PR vs
 manual is your choice; for a repo this size a single combined PR is probably fine.
+
+## AI-slop gate (aislop)
+
+**aislop** (https://github.com/scanaislop/aislop) is a language-agnostic AI-slop
+quality gate — deterministic (no LLM), 40+ rules, scored 0–100. It flags agent slop:
+narrative/trivial comments, swallowed/broad exceptions, dead code, unused/hallucinated
+imports, etc. It complements (does not replace) the per-language linters above and is
+intended to run **per-edit + PR-gated** on all repos with supported languages.
+
+This repo is **Python** — aislop supports Python, so the full integration applies.
+
+> **Caveats for Python repos using this toolchain (2026-05-29, aislop 0.9.4):**
+>
+> - **`ai-slop/unused-import` fires on `from __future__ import annotations`.**
+>   aislop flags the future-flag as an unused import — Ruff/Pyflakes specifically exempt
+>   `__future__` imports; aislop 0.9.4 does not. **Do NOT remove it** — removing the
+>   line changes annotation-evaluation semantics (PEP 563).
+> - **FastAPI `Body(default={})`** triggers `python-mutable-default` — not a bug in a
+>   FastAPI context; exclude or note as a known FP.
+> - **No per-rule config in 0.9.4.** `.aislop/config.yml` supports `ci.failBelow`,
+>   `exclude` globs, `extends`, and whole-engine on/off, but NOT per-rule
+>   disable/severity. If `__future__` imports dominate this repo's findings and the
+>   score looks misleadingly low, hold off gating until per-rule config lands.
+
+### Per-edit (① on-save)
+
+```bash
+aislop hook install --claude --project
+```
+
+Install the Claude Code per-edit hook. **Pin the binary version** — never `@latest`
+in a hook; it does a network version check on every edit.
+
+### PR / CI gate (③)
+
+```yaml
+      - name: AI-slop gate (aislop)
+        run: npx --yes aislop@0.9.4 ci .
+```
+
+This scores the **whole repo** and exits 1 when the score falls below `ci.failBelow`.
+There is no diff/changed-files mode — the gate is "don't regress the whole-repo score."
+On Gitea use the `npx` CLI, **not** the GitHub composite action `scanaislop/aislop@vX`
+(GitHub-only). Always pin a version (e.g. `0.9.4`), not `@latest`.
+
+### Config (`.aislop/config.yml`)
+
+```yaml
+ci:
+  failBelow: 80          # git-wizard's baseline; lower if FPs dominate
+exclude:
+  - "tests/**"           # optional — adjust to taste
+# engines: { ai-slop: off }  # uncomment to disable if __future__ FPs tank score
+```
+
+Supported keys: `ci.failBelow`, `exclude`, `extends`, whole-engine on/off
+(`format`, `lint`, `code-quality`, `ai-slop`, `security`, `architecture`).
+Per-rule config is not available in 0.9.4.
+
+### Rollout
+
+Clean up first, then gate — do not ratchet from a noisy baseline. Run
+`npx aislop@0.9.4 scan . -d` to see all findings, fix real slop, tune `exclude`
+for irreducible FPs, then set `failBelow` to a score you can maintain. Reference:
+git-wizard's gate is `failBelow: 80`.
+
+> **Shell scripts are out of aislop's scope.** The `.sh` files in this repo are not
+> a supported language; aislop silently skips them. The shell linters (`shellcheck`,
+> `shfmt`) in the tiers above remain the gate for those files.
+
+Full detail: `C:\Users\mtsch\.claude\notes\idioms_linters.md` (AI-slop gate section).

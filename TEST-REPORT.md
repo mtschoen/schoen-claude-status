@@ -1,20 +1,21 @@
-schoen-claude-status test report — 2026-05-29T22:15:01Z
+schoen-claude-status test report — 2026-05-29T22:40:11Z
 ═══════════════════════════════════════════════════════
 
 Status:   PASS
 Mode:     close-the-gap (lint gate stand-up)
 Tests:    6 verify_*.py scripts — all passing
-Git:      64a3291 (SIM103 fix — gate reached 0 findings)
+Git:      8a3f1b9 (earn strict zero — 0 rule ignores, all rules active)
 
 Lint:     ruff 0 findings  ✓  (hard gate — `ruff check .` + `ruff format --check .`)
           pyright: not yet run to clean — CI step is non-blocking (`|| true`)
           shellcheck: not yet run to clean — CI step is non-blocking (`|| true`)
-          0 per-case suppressions (`# noqa`)
-          5 rule-level ignores, all documented in pyproject.toml:
-            SIM105, UP042  — stylistic judgment calls (mirrors fleet gate)
-            RUF001/002/003 — ambiguous '×' is a deliberate convention that
-                             renders in user-facing status-line output
-          1 per-file-ignore group (scripts/**/*.py = test-idiom allowances)
+          0 rule-level ignores, 0 per-file-ignores — every finding the broad
+            select surfaces is FIXED, not suppressed (incl. SIM105 -> contextlib
+            .suppress, SIM115 -> context manager, RUF002/RUF003 -> ASCII 'x').
+          1 per-case suppression: a single `# noqa: RUF001` in statusline_lib.py
+            on the one user-facing '×' (the calibrated-ETA badge renders the
+            multiplication sign literally; ASCII 'x' would change output).
+            Justified inline at the site.
 
 Coverage: NOT INSTRUMENTED — no coverage.py / line-coverage tooling is
           configured in this repo. The 6 scripts/verify_*.py are behavioral
