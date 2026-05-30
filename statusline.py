@@ -40,9 +40,6 @@ from statusline_lib import (
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
 _ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
 
-# Per-render spinner so the user can see when the status line refreshes even
-# if the rendered text is byte-identical. Derived from wall clock at 4Hz, so
-# consecutive renders ≥250ms apart almost always show different frames.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -125,9 +122,6 @@ def main():
     # --- Quota: 5h + weekly utilization with pace projection.
     quota_summary = format_quota(d.get("rate_limits"))
 
-    # --- Beacon: live progress signal from the active turn (if the agent
-    #     emitted one). Resolves to (None, None) when walker is missing,
-    #     no beacon exists, or the latest is kind=end.
     session_id = d.get("session_id") or ""
     beacon_summary, beacon_dict = (
         format_beacon(session_id) if session_id else (None, None)
@@ -170,9 +164,6 @@ def main():
     if line2:
         sys.stdout.write("\n" + line2)
 
-    # --- Beacon (line 3) when a live beacon is present, with calibrated ETA
-    #     appended inline to keep it on a single dedicated row instead of
-    #     bloating line 2.
     if beacon_summary:
         line3 = beacon_summary
         if beacon_dict and (beacon_dict.get("eta_seconds") or 0) > 0:
@@ -183,10 +174,6 @@ def main():
 
 
 def _log_error():
-    # Append a timestamped traceback so a crash leaves a forensic trail
-    # instead of a silent blank line. Claude Code hides stderr and shows
-    # nothing on nonzero exit, so without this any rare-input crash is
-    # invisible.
     try:
         import traceback
 

@@ -64,9 +64,6 @@ CTX_DENOM = "\x1b[38;5;139m"  # soft mauve
 # substitute false-positives for ~5 minutes after a clean /exit, which the
 # 20s restart-handoff debounce can't suppress).
 
-# psutil is imported lazily (in _resolve_psutil), not at module load: on a
-# session-count cache hit -- the common case during a burst of renders -- we pay
-# neither its ~22ms import nor the ~18ms process scan.
 _psutil = None  # cached module handle within a process; None if unavailable.
 
 
@@ -82,12 +79,6 @@ def _resolve_psutil():
     return _psutil
 
 
-# Process enumeration is the most expensive thing the statusline does per render
-# (~40ms incl. the psutil import). The count only changes when a Claude session
-# starts/stops in this cwd -- far slower than the render cadence -- so memoize it
-# on disk with a short TTL. This is NOT output caching: the badge is still
-# re-derived from this count + the live debounce every render; we only skip a
-# redundant OS scan whose answer cannot have changed within the TTL window.
 _SESSION_COUNT_CACHE_PATH = os.path.join(
     os.path.expanduser("~"), ".claude", ".statusline-sessioncount-cache.json"
 )
@@ -166,7 +157,6 @@ def _process_matches(name, cmdline, cwd, target_cwd):
         "claude" in (arg or "").lower() for arg in cl
     ):
         return False
-    # -p / --print is the headless mode used by Task subagents and scripted runs.
     if "-p" in cl or "--print" in cl:
         return False
     if not cwd:
@@ -283,18 +273,12 @@ def debounce_session_count(
     return 1
 
 
-# (input_per_mtok, output_per_mtok). Cache read = 0.1x input; cache write =
-# 1.25x input (matches billing as of 2026-04-30; docs say 2.0x for 1h-TTL,
-# empirically wrong).
 _RATES = {
     "opus": (5.0, 25.0),
     "sonnet": (3.0, 15.0),
     "haiku": (1.0, 5.0),
 }
 
-# Server-side web search is billed per request: $10 / 1,000 = $0.01 each.
-# Verified against ~/.claude.json lastModelUsage.costUSD -- adding this term
-# closes the 30-45% under-count on search-heavy (haiku) sessions to exact 1.000.
 _WEB_SEARCH_COST_USD = 0.01
 
 
@@ -415,9 +399,6 @@ def walk_transcript(path, include_subagents=False):
     parent_cost = 0.0
     if path and os.path.exists(path):
         process(path)
-        # Snapshot before subagents so parent and subagent cost can be reported
-        # separately: the main statusline shows the authoritative parent figure
-        # plus our own subagent estimate.
         parent_cost = cost_total
         if include_subagents and path.endswith(".jsonl"):
             sub_dir = path[:-6] + "/subagents"
@@ -825,10 +806,6 @@ def _find_beacon_anchors(session_id):
                             if latest_begin_ts is not None:
                                 latest_report_ts = ts
                         elif kind == "end":
-                            # end closes the lifecycle. Any later reports
-                            # without a fresh begin are orphans — surface
-                            # them as "no begin" rather than carrying a stale
-                            # turn anchor across the turn boundary.
                             latest_begin_ts = None
                             latest_report_ts = None
                             latest_begin_eta = None
@@ -1017,11 +994,6 @@ def _pace_buckets_cached(period_seconds, win_start_unix):
     return trailing, window
 
 
-# Optional native walker (~/claude-walker, separate repo). Honors the
-# CLI/output contract documented in claude-walker/SPEC.md. Cuts the cold
-# pace walk from ~250ms parallel Python to ~80-180ms single-process; the
-# Python implementation below stays as the fallback when the binary isn't
-# present or fails for any reason.
 _WALKER_BIN_ENV = "CLAUDE_WALKER_BIN"
 
 

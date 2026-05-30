@@ -256,10 +256,6 @@ def main():
 
 
 def _log_error():
-    # Match statusline.py's safety net: a crashing subagent renderer
-    # silently drops rows, so log the traceback for later forensics.
-    # NDJSON output schema is strict, so we don't emit a visible cue --
-    # the parent statusline carries the user-facing error indicator.
     try:
         import traceback
 
