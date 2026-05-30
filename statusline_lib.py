@@ -334,6 +334,53 @@ def color_high_good(pct, warn, danger, decimals=0):
     return f"{c}{format(pct, spec)}%{RESET}"
 
 
+def _accumulate_assistant_turn(entry, acc, seen_ids):
+    """Fold one transcript line into the running totals `acc`. No-op for
+    non-assistant turns and for duplicate message ids."""
+    msg = entry.get("message") or {}
+    if msg.get("role") != "assistant":
+        return
+    mid = msg.get("id")
+    if mid:
+        # transcripts repeat assistant turns under one message.id (snapshots/
+        # checkpoints carry the same usage); count once.
+        if mid in seen_ids:
+            return
+        seen_ids.add(mid)
+    u = msg.get("usage") or {}
+    r = int(u.get("cache_read_input_tokens") or 0)
+    w = int(u.get("cache_creation_input_tokens") or 0)
+    i = int(u.get("input_tokens") or 0)
+    o = int(u.get("output_tokens") or 0)
+    acc["read"] += r
+    acc["write"] += w
+    acc["input"] += i
+    acc["output"] += o
+    model_id = msg.get("model") or ""
+    if model_id:
+        acc["last_model"] = model_id
+    acc["cost"] += _cost_for_turn(u, model_id or acc["last_model"])
+    acc["last_input"] = i
+    acc["last_cache_create"] = w
+    acc["last_cache_read"] = r
+
+
+def _walk_one_transcript(path, acc, seen_ids):
+    """Stream one JSONL transcript, folding each line into `acc`."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = _json_loads(line)
+                except Exception:
+                    continue
+                _accumulate_assistant_turn(entry, acc, seen_ids)
+    except OSError:
+        # Transcript became unreadable mid-walk; use the totals gathered so far
+        # rather than failing the whole render.
+        pass
+
+
 def walk_transcript(path, include_subagents=False):
     """Sum cache/input/output tokens, compute cost, snapshot most-recent turn.
 
@@ -349,75 +396,41 @@ def walk_transcript(path, include_subagents=False):
     <path-without-.jsonl>/subagents/agent-*.jsonl so the cache total reflects
     everything attributed to this session. The subagent script passes False.
     """
-    read_total = write_total = input_total = output_total = 0
-    cost_total = 0.0
-    last_model = ""
-    last_input = last_cache_create = last_cache_read = 0
+    acc = {
+        "read": 0,
+        "write": 0,
+        "input": 0,
+        "output": 0,
+        "cost": 0.0,
+        "last_model": "",
+        "last_input": 0,
+        "last_cache_create": 0,
+        "last_cache_read": 0,
+    }
     seen_ids = set()
-
-    def process(p):
-        nonlocal read_total, write_total, input_total, output_total
-        nonlocal cost_total, last_model, last_input, last_cache_create, last_cache_read
-        try:
-            with open(p, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        e = _json_loads(line)
-                    except Exception:
-                        continue
-                    msg = e.get("message") or {}
-                    if msg.get("role") != "assistant":
-                        continue
-                    mid = msg.get("id")
-                    if mid:
-                        # transcripts repeat assistant turns under one message.id
-                        # (snapshots/checkpoints carry the same usage); count once.
-                        if mid in seen_ids:
-                            continue
-                        seen_ids.add(mid)
-                    u = msg.get("usage") or {}
-                    r = int(u.get("cache_read_input_tokens") or 0)
-                    w = int(u.get("cache_creation_input_tokens") or 0)
-                    i = int(u.get("input_tokens") or 0)
-                    o = int(u.get("output_tokens") or 0)
-                    read_total += r
-                    write_total += w
-                    input_total += i
-                    output_total += o
-                    model_id = msg.get("model") or ""
-                    if model_id:
-                        last_model = model_id
-                    cost_total += _cost_for_turn(u, model_id or last_model)
-                    last_input = i
-                    last_cache_create = w
-                    last_cache_read = r
-        except OSError:
-            # Transcript became unreadable mid-walk; use the totals gathered
-            # so far rather than failing the whole render.
-            pass
 
     parent_cost = 0.0
     if path and os.path.exists(path):
-        process(path)
-        parent_cost = cost_total
+        _walk_one_transcript(path, acc, seen_ids)
+        parent_cost = acc["cost"]
         if include_subagents and path.endswith(".jsonl"):
             sub_dir = path[:-6] + "/subagents"
             if os.path.isdir(sub_dir):
                 for sub in glob.glob(os.path.join(sub_dir, "agent-*.jsonl")):
-                    process(sub)
+                    _walk_one_transcript(sub, acc, seen_ids)
 
     return {
-        "read": read_total,
-        "write": write_total,
-        "input": input_total,
-        "output": output_total,
-        "cost": cost_total,
+        "read": acc["read"],
+        "write": acc["write"],
+        "input": acc["input"],
+        "output": acc["output"],
+        "cost": acc["cost"],
         "parent_cost": parent_cost,
-        "subagent_cost": cost_total - parent_cost,
-        "last_model_id": last_model,
-        "last_input": last_input,
-        "last_cache_create": last_cache_create,
-        "last_cache_read": last_cache_read,
+        "subagent_cost": acc["cost"] - parent_cost,
+        "last_model_id": acc["last_model"],
+        "last_input": acc["last_input"],
+        "last_cache_create": acc["last_cache_create"],
+        "last_cache_read": acc["last_cache_read"],
     }
 
 
@@ -729,6 +742,75 @@ def _find_session_jsonl(session_id):
     return None
 
 
+def _iter_beacons_in_text(text):
+    """Yield parsed beacon dicts embedded in one assistant text chunk."""
+    if "<progress-beacon>" not in text:
+        return
+    for match in _BEACON_BLOCK_RE.finditer(text):
+        try:
+            beacon = _json_loads(match.group(1))
+        except (ValueError, TypeError):
+            continue
+        if isinstance(beacon, dict):
+            yield beacon
+
+
+def _iter_assistant_beacons(entry):
+    """Yield (timestamp, beacon_dict) for every progress-beacon in a JSONL
+    assistant entry. No-op for non-assistant / malformed entries."""
+    if not isinstance(entry, dict) or entry.get("type") != "assistant":
+        return
+    ts = entry.get("timestamp")
+    if not ts:
+        return
+    content = (entry.get("message") or {}).get("content") or []
+    if not isinstance(content, list):
+        return
+    for chunk in content:
+        if not isinstance(chunk, dict) or chunk.get("type") != "text":
+            continue
+        for beacon in _iter_beacons_in_text(chunk.get("text") or ""):
+            yield ts, beacon
+
+
+def _apply_beacon(beacon, ts, state):
+    """Fold one beacon into the (begin_ts, report_ts, begin_eta) anchor state."""
+    kind = beacon.get("kind")
+    if kind == "begin":
+        state["begin_ts"] = ts
+        # New begin resets the step anchor -- any reports before this begin
+        # belonged to a closed lifecycle.
+        state["report_ts"] = None
+        eta = beacon.get("eta_seconds")
+        try:
+            eta_val = float(eta) if eta is not None else 0.0
+        except (TypeError, ValueError):
+            eta_val = 0.0
+        state["begin_eta"] = eta_val if eta_val > 0 else None
+    elif kind == "report":
+        # Only track reports within the current begin's lifecycle.
+        if state["begin_ts"] is not None:
+            state["report_ts"] = ts
+    elif kind == "end":
+        state["begin_ts"] = None
+        state["report_ts"] = None
+        state["begin_eta"] = None
+
+
+def _scan_beacon_anchors(path):
+    """One forward pass over the JSONL, folding every beacon into anchor state."""
+    state = {"begin_ts": None, "report_ts": None, "begin_eta": None}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                evt = _json_loads(line)
+            except (ValueError, TypeError):
+                continue
+            for ts, beacon in _iter_assistant_beacons(evt):
+                _apply_beacon(beacon, ts, state)
+    return state
+
+
 def _find_beacon_anchors(session_id):
     """Scan the session's JSONL for the active lifecycle's anchors.
 
@@ -756,62 +838,11 @@ def _find_beacon_anchors(session_id):
     path = _find_session_jsonl(session_id)
     if not path:
         return (None, None, None)
-    latest_begin_ts = None
-    latest_report_ts = None
-    latest_begin_eta = None
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    evt = _json_loads(line)
-                except (ValueError, TypeError):
-                    continue
-                if not isinstance(evt, dict) or evt.get("type") != "assistant":
-                    continue
-                ts = evt.get("timestamp")
-                if not ts:
-                    continue
-                msg = evt.get("message") or {}
-                content = msg.get("content") or []
-                if not isinstance(content, list):
-                    continue
-                for chunk in content:
-                    if not isinstance(chunk, dict) or chunk.get("type") != "text":
-                        continue
-                    text = chunk.get("text") or ""
-                    if "<progress-beacon>" not in text:
-                        continue
-                    for match in _BEACON_BLOCK_RE.finditer(text):
-                        try:
-                            beacon = _json_loads(match.group(1))
-                        except (ValueError, TypeError):
-                            continue
-                        if not isinstance(beacon, dict):
-                            continue
-                        kind = beacon.get("kind")
-                        if kind == "begin":
-                            latest_begin_ts = ts
-                            # New begin resets the step anchor — any reports
-                            # before this begin belonged to a closed lifecycle.
-                            latest_report_ts = None
-                            eta = beacon.get("eta_seconds")
-                            try:
-                                eta_val = float(eta) if eta is not None else 0.0
-                            except (TypeError, ValueError):
-                                eta_val = 0.0
-                            latest_begin_eta = eta_val if eta_val > 0 else None
-                        elif kind == "report":
-                            # Only track reports that fall within the current
-                            # begin's lifecycle (i.e., after the latest begin).
-                            if latest_begin_ts is not None:
-                                latest_report_ts = ts
-                        elif kind == "end":
-                            latest_begin_ts = None
-                            latest_report_ts = None
-                            latest_begin_eta = None
+        state = _scan_beacon_anchors(path)
     except OSError:
         return (None, None, None)
-    return (latest_begin_ts, latest_report_ts, latest_begin_eta)
+    return (state["begin_ts"], state["report_ts"], state["begin_eta"])
 
 
 def _format_clock_and_elapsed(begin_ts):
@@ -1120,61 +1151,149 @@ def _walk_pace_buckets_native(period_seconds, win_start_unix):
         return None
 
 
+def _parse_pace_line(line, seen_ids, earliest):
+    """Parse one JSONL line for the pace walk. Returns (ts, usage, model_id),
+    or None to skip (blank, malformed, non-assistant, duplicate id, too old)."""
+    if not line.strip():
+        return None
+    try:
+        e = _json_loads(line)
+    except Exception:
+        return None
+    msg = e.get("message") or {}
+    if msg.get("role") != "assistant":
+        return None
+    mid = msg.get("id")
+    if mid:
+        if mid in seen_ids:
+            return None
+        seen_ids.add(mid)
+    ts_str = e.get("timestamp")
+    if not ts_str:
+        return None
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+    if ts < earliest:
+        return None
+    return ts, (msg.get("usage") or {}), (msg.get("model") or "")
+
+
+def _pace_costs_for_file(path, seen_ids, earliest, period_cutoff, win_start_unix):
+    """(trailing_dollars, window_dollars) cost contributed by one JSONL file."""
+    trailing = window_cost = 0.0
+    last_model = ""
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                parsed = _parse_pace_line(line, seen_ids, earliest)
+                if parsed is None:
+                    continue
+                ts, usage, model_id = parsed
+                if model_id:
+                    last_model = model_id
+                c = _cost_for_turn(usage, model_id or last_model)
+                if ts >= period_cutoff:
+                    trailing += c
+                if ts >= win_start_unix:
+                    window_cost += c
+    except OSError:
+        return 0.0, 0.0
+    return trailing, window_cost
+
+
 def _walk_session_group(paths, period_cutoff, win_start_unix):
     """Walk one parent+subagents group, return (trailing_dollars, window_dollars).
 
     Module-level so ProcessPoolExecutor can serialize a reference to it.
 
-    Sequential within a group so the dedup set catches the parent <->
-    auto-compact-subagent message.id overlap (the only collision pattern that
-    actually appears -- 146 instances in the working corpus, all parent-vs-its-
-    own-acompact-subagent). Cross-session collisions weren't observed and are
-    not defended against here; if they ever appear in real data the cost
-    impact would still round to zero.
+    Sequential within a group (a single shared `seen_ids`) so the dedup set
+    catches the parent <-> auto-compact-subagent message.id overlap (the only
+    collision pattern that actually appears -- 146 instances in the working
+    corpus, all parent-vs-its-own-acompact-subagent). Cross-session collisions
+    weren't observed and are not defended against here; if they ever appear in
+    real data the cost impact would still round to zero.
     """
     earliest = min(period_cutoff, win_start_unix)
     trailing = window_cost = 0.0
     seen_ids = set()
     for path in paths:
-        last_model = ""
-        try:
-            with open(path, "rb") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        e = _json_loads(line)
-                    except Exception:
-                        continue
-                    msg = e.get("message") or {}
-                    if msg.get("role") != "assistant":
-                        continue
-                    mid = msg.get("id")
-                    if mid:
-                        if mid in seen_ids:
-                            continue
-                        seen_ids.add(mid)
-                    ts_str = e.get("timestamp")
-                    if not ts_str:
-                        continue
-                    try:
-                        ts = datetime.fromisoformat(
-                            ts_str.replace("Z", "+00:00")
-                        ).timestamp()
-                    except (ValueError, TypeError):
-                        continue
-                    if ts < earliest:
-                        continue
-                    model_id = msg.get("model") or ""
-                    if model_id:
-                        last_model = model_id
-                    c = _cost_for_turn(msg.get("usage") or {}, model_id or last_model)
-                    if ts >= period_cutoff:
-                        trailing += c
-                    if ts >= win_start_unix:
-                        window_cost += c
-        except OSError:
-            continue
+        t, w = _pace_costs_for_file(
+            path, seen_ids, earliest, period_cutoff, win_start_unix
+        )
+        trailing += t
+        window_cost += w
+    return trailing, window_cost
+
+
+def _discover_pace_groups(roots, earliest):
+    """Group transcript files (parent jsonl + its subagents) by
+    (slug, session_id), keeping only files whose mtime could hold in-range
+    entries. The mtime prefilter prunes ~80% of files."""
+    groups = {}
+    for proj_root in roots:
+        for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
+            try:
+                if os.path.getmtime(path) < earliest:
+                    continue
+            except OSError:
+                continue
+            slug = os.path.basename(os.path.dirname(path))
+            session_id = os.path.splitext(os.path.basename(path))[0]
+            groups.setdefault((slug, session_id), []).append(path)
+        sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
+        for path in glob.glob(sub_pattern):
+            try:
+                if os.path.getmtime(path) < earliest:
+                    continue
+            except OSError:
+                continue
+            sub_dir = os.path.dirname(path)
+            session_dir = os.path.dirname(sub_dir)
+            session_id = os.path.basename(session_dir)
+            slug = os.path.basename(os.path.dirname(session_dir))
+            groups.setdefault((slug, session_id), []).append(path)
+    return groups
+
+
+def _walk_groups_inline(groups, period_cutoff, win_start_unix):
+    """Sequential sum over groups -- used for <=2 groups and as the
+    parallel-path fallback."""
+    trailing = window_cost = 0.0
+    for paths in groups.values():
+        t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
+        trailing += t
+        window_cost += w
+    return trailing, window_cost
+
+
+def _walk_groups_parallel(groups, period_cutoff, win_start_unix):
+    """Dispatch group walks to a ProcessPoolExecutor; fall back to inline if
+    the pool can't start."""
+    workers = min(8, os.cpu_count() or 4)
+    trailing = window_cost = 0.0
+    try:
+        # Lazy import: pulls in multiprocessing (~26ms). Only paid here, on the
+        # rare >2-group parallel path -- never on a normal statusline render.
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_walk_session_group, paths, period_cutoff, win_start_unix)
+                for paths in groups.values()
+            ]
+            for fut in as_completed(futures):
+                try:
+                    t, w = fut.result()
+                except Exception:
+                    continue
+                trailing += t
+                window_cost += w
+    except (OSError, RuntimeError):
+        # ProcessPoolExecutor unavailable (sandboxed env, no fork on some
+        # platforms, etc.) -- fall back to inline sequential walk.
+        return _walk_groups_inline(groups, period_cutoff, win_start_unix)
     return trailing, window_cost
 
 
@@ -1212,70 +1331,14 @@ def _walk_pace_buckets(period_seconds, win_start_unix):
     period_cutoff = now - period_seconds
     earliest = min(period_cutoff, win_start_unix)
 
-    # Group by (slug, session_id) so each work unit owns its own dedup set.
-    groups = {}
-    for proj_root in roots:
-        for path in glob.glob(os.path.join(proj_root, "*", "*.jsonl")):
-            try:
-                if os.path.getmtime(path) < earliest:
-                    continue
-            except OSError:
-                continue
-            slug = os.path.basename(os.path.dirname(path))
-            session_id = os.path.splitext(os.path.basename(path))[0]
-            groups.setdefault((slug, session_id), []).append(path)
-        sub_pattern = os.path.join(proj_root, "*", "*", "subagents", "agent-*.jsonl")
-        for path in glob.glob(sub_pattern):
-            try:
-                if os.path.getmtime(path) < earliest:
-                    continue
-            except OSError:
-                continue
-            sub_dir = os.path.dirname(path)
-            session_dir = os.path.dirname(sub_dir)
-            session_id = os.path.basename(session_dir)
-            slug = os.path.basename(os.path.dirname(session_dir))
-            groups.setdefault((slug, session_id), []).append(path)
-
+    groups = _discover_pace_groups(roots, earliest)
     if not groups:
         return 0.0, 0.0
 
     # Inline walk if the parallelism win wouldn't beat process-pool startup.
     if len(groups) <= 2:
-        trailing = window_cost = 0.0
-        for paths in groups.values():
-            t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
-            trailing += t
-            window_cost += w
-        return trailing, window_cost
-
-    workers = min(8, os.cpu_count() or 4)
-    trailing = window_cost = 0.0
-    try:
-        # Lazy import: pulls in multiprocessing (~26ms). Only paid here, on the
-        # rare >2-group parallel path -- never on a normal statusline render.
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            futures = [
-                pool.submit(_walk_session_group, paths, period_cutoff, win_start_unix)
-                for paths in groups.values()
-            ]
-            for fut in as_completed(futures):
-                try:
-                    t, w = fut.result()
-                except Exception:
-                    continue
-                trailing += t
-                window_cost += w
-    except (OSError, RuntimeError):
-        # ProcessPoolExecutor unavailable (sandboxed env, no fork on some
-        # platforms, etc.) -- fall back to inline sequential walk.
-        for paths in groups.values():
-            t, w = _walk_session_group(paths, period_cutoff, win_start_unix)
-            trailing += t
-            window_cost += w
-    return trailing, window_cost
+        return _walk_groups_inline(groups, period_cutoff, win_start_unix)
+    return _walk_groups_parallel(groups, period_cutoff, win_start_unix)
 
 
 def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
