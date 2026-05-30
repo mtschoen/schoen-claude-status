@@ -37,11 +37,14 @@ Coverage: NOT INSTRUMENTED — no coverage.py / line-coverage tooling is
 
 ───────────────────────────────────────────────────────
 Validation gates (the bar):  ruff check . -> 0   ·   aislop ci . -> >= 90 (at 100)
-Run locally:  ruff check . && ruff format --check . && npx aislop@0.9.4 ci .
+Run locally:  npm ci --ignore-scripts  (first time)  then
+              ruff check . && ruff format --check . && npm run lint:aislop
 Config:       pyproject.toml ([tool.ruff])  ·  .aislop/config.yml
 Rollout doc:  LINTER-SETUP.md
 On-save:      .claude/settings.json PostToolUse hook — ruff -q per edited .py
-              + aislop scan (whole-repo, filtered to the edited file) per .py edit
+              + aislop scan (whole-repo, filtered to the edited file) per .py
+              edit, via the lockfile-pinned local node_modules/.bin/aislop
+              (not npx --yes; see package.json / package-lock.json)
 CI:           .gitea/workflows/ci.yml — ruff + aislop hard gates;
               pyright + shellcheck non-blocking.
 Package:      statusline_lib/ (base, sessions, walker, cost, beacon, pace, __init__)

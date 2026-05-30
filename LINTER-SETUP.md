@@ -116,26 +116,43 @@ in a hook; it does a network version check on every edit.
 > callback is baseline/regression-driven (it stays silent until a baseline is
 > captured). Instead, this repo adds a second `PostToolUse` arm in
 > `.claude/settings.json` alongside the ruff/shellcheck one: on each `.py` edit
-> it runs `npx --yes aislop@0.9.4 scan . --json` (pinned, whole-repo, honoring
-> `.aislop/config.yml` excludes) and feeds back only the diagnostics for the
-> edited file via `additionalContext`. aislop has no single-file scan mode
-> (`scan` takes a directory; `--include` is additive), so the scan is whole-repo
-> and filtered by the edited file's basename. **Cost:** the pinned `npx` invoke
-> adds latency per `.py` edit vs ruff's single-file check — acceptable here, but
-> `npm i -g aislop@0.9.4` + calling the resolved binary removes the npx
-> resolution overhead if the lag becomes annoying.
+> it runs the **local, lockfile-pinned** binary
+> `"${CLAUDE_PROJECT_DIR:-.}/node_modules/.bin/aislop" scan ... --json`
+> (whole-repo, honoring `.aislop/config.yml` excludes) and feeds back only the
+> diagnostics for the edited file via `additionalContext`. aislop has no
+> single-file scan mode (`scan` takes a directory; `--include` is additive), so
+> the scan is whole-repo and filtered by the edited file's basename.
+>
+> **Supply-chain hardening — no `npx --yes` against the live registry.** aislop
+> is vendored as a `devDependency` in `package.json` and pinned by integrity
+> hash in `package-lock.json`; install with `npm ci --ignore-scripts` (the
+> `--ignore-scripts` blocks dependency lifecycle scripts). The hook and CI both
+> invoke the resolved local binary, never `npx --yes aislop@x` — which fetched
+> from the registry without integrity verification and executed it on every run.
+> This also removes the per-edit npx-resolution latency. `package.json` is
+> `private: true`, dev-tooling only (the statusline app itself is Python); a
+> `lint:aislop` script keeps the dep accounted-for (knip flags an unreferenced
+> tool dep as unused). Pinning is necessary but not sufficient on its own —
+> `npm audit` in CI and dependency review remain the other layers.
 
 ### PR / CI gate (③)
 
 ```yaml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install aislop (lockfile-pinned, no install scripts)
+        run: npm ci --ignore-scripts
       - name: AI-slop gate (aislop)
-        run: npx --yes aislop@0.9.4 ci .
+        run: npm run lint:aislop      # -> node_modules/.bin/aislop ci .
 ```
 
 This scores the **whole repo** and exits 1 when the score falls below `ci.failBelow`.
 There is no diff/changed-files mode — the gate is "don't regress the whole-repo score."
-On Gitea use the `npx` CLI, **not** the GitHub composite action `scanaislop/aislop@vX`
-(GitHub-only). Always pin a version (e.g. `0.9.4`), not `@latest`.
+Install the pinned local binary via `npm ci` (verifies `package-lock.json`
+integrity hashes) rather than `npx --yes aislop@x`, which fetches from the live
+registry unverified on every run. On Gitea, do **not** use the GitHub composite
+action `scanaislop/aislop@vX` (GitHub-only). Always pin a version, never `@latest`.
 
 ### Config (`.aislop/config.yml`)
 

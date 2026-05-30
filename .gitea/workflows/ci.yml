@@ -33,10 +33,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Install aislop (lockfile-pinned, no install scripts)
+        # aislop is vendored as a devDependency in package.json; package-lock.json
+        # carries the integrity hashes. `npm ci` installs exactly the locked tree
+        # and verifies those hashes; --ignore-scripts blocks dependency lifecycle
+        # scripts. This replaces `npx --yes aislop@x`, which fetched from the live
+        # registry without integrity verification on every run.
+        run: npm ci --ignore-scripts
       - name: AI-slop gate (aislop)
         # Whole-repo AI-slop score gate. failBelow + exclusions in
-        # .aislop/config.yml. The repo currently scores 100/100.
-        run: npx --yes aislop@0.9.4 ci .
+        # .aislop/config.yml. The repo currently scores 100/100. Runs the
+        # `lint:aislop` script (-> local node_modules/.bin/aislop ci .).
+        run: npm run lint:aislop
       - name: Type check (pyright, non-blocking)
         # Informational for now. Drop the `|| true` to hard-fail once the
         # codebase is clean against pyright.
