@@ -1,10 +1,6 @@
-"""Verify the weekly quota render: pace number + colored current-rate arrow.
-
-Drives `format_quota` with a synthetic rate_limits payload and a pinned clock +
-pinned hourly walk, asserting: the cumulative-pace number is colored by its own
-threshold; a hotter current rate yields a (worse) up arrow, a cooler one a down
-arrow; the arrow is omitted when the window has no dollars; and STATUSLINE_VERBOSE_PACE
-swaps the arrow for an explicit second number.
+"""Verify the quota render split: format_quota is number-only; the current-rate
+arrow and on-target glyph now come from pace.weekly_needle (relocated to the
+burn-rate field). Pins the clock + hourly walk, mirroring the burn-rate verifier.
 
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
@@ -14,146 +10,103 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.pace as pace
-from statusline_lib.base import GREEN, RED, RESET
-from statusline_lib.pace import ARROW_DOWN, ARROW_UP, ON_TARGET_GLYPH, format_quota
+from statusline_lib.base import RESET, ramp_color
+from statusline_lib.pace import (
+    ARROW_DOWN,
+    ARROW_UP,
+    ON_TARGET_GLYPH,
+    format_quota,
+    weekly_needle,
+)
 
 _HOUR = 3600.0
+_WIN_START = 1_700_000_000.0
 
 
-def _rate_limits(util, win_start, period):
-    return {
-        "seven_day": {"used_percentage": util, "resets_at": win_start + period},
-        # 5h omitted -> only the weekly part is rendered.
-    }
-
-
-def _render(util, hourly, elapsed_hours, period_days=7):
+def _pin(hourly, elapsed_hours, period_days=7):
     period = period_days * 24 * _HOUR
-    win_start = 1_700_000_000.0
-    now = win_start + elapsed_hours * _HOUR
-    real_now = pace._now_unix
-    real_hourly = pace._pace_hourly_cached
+    now = _WIN_START + elapsed_hours * _HOUR
+    real_now, real_hourly = pace._now_unix, pace._pace_hourly_cached
     pace._now_unix = lambda: now
     pace._pace_hourly_cached = lambda _ws: hourly
+    return period, real_now, real_hourly
+
+
+def _render_quota(util, hourly, elapsed_hours):
+    period, real_now, real_hourly = _pin(hourly, elapsed_hours)
+    rl = {"seven_day": {"used_percentage": util, "resets_at": _WIN_START + period}}
     try:
-        return format_quota(_rate_limits(util, win_start, period))
+        return format_quota(rl)
     finally:
-        pace._now_unix = real_now
-        pace._pace_hourly_cached = real_hourly
+        pace._now_unix, pace._pace_hourly_cached = real_now, real_hourly
 
 
-def _check_hot_rate_up_arrow(failures):
-    # Half the week elapsed, only 30% used (cumulative surplus -> green), but the
-    # recent hours are scorching -> current rate hotter than cumulative -> up arrow.
-    elapsed_h = 84  # half of 168h
-    hourly = [0.1] * 70 + [50.0] * 14  # cool early, blazing recent
-    out = _render(30.0, hourly, elapsed_h)
-    if ARROW_UP not in out:
-        failures.append(f"hot recent rate should render an up arrow; got {out!r}")
-
-
-def _check_cool_rate_down_arrow(failures):
-    # Front-loaded: binged early, idle recently -> current rate cooler -> down arrow.
-    elapsed_h = 84
-    hourly = [50.0] * 14 + [0.1] * 70
-    out = _render(60.0, hourly, elapsed_h)
-    if ARROW_DOWN not in out:
-        failures.append(f"cooling recent rate should render a down arrow; got {out!r}")
-
-
-def _check_no_dollars_no_arrow(failures):
-    out = _render(40.0, [], 84)
-    if ARROW_UP in out or ARROW_DOWN in out:
-        failures.append(f"empty window should omit the arrow; got {out!r}")
-
-
-def _check_verbose_two_numbers(failures):
-    os.environ["STATUSLINE_VERBOSE_PACE"] = "1"
+def _render_needle(util, hourly, elapsed_hours):
+    period, real_now, real_hourly = _pin(hourly, elapsed_hours)
+    rl = {"seven_day": {"used_percentage": util, "resets_at": _WIN_START + period}}
     try:
-        out = _render(30.0, [0.1] * 70 + [50.0] * 14, 84)
+        return weekly_needle(rl)
     finally:
-        del os.environ["STATUSLINE_VERBOSE_PACE"]
-    if "/" not in out:
+        pace._now_unix, pace._pace_hourly_cached = real_now, real_hourly
+
+
+def _check_quota_is_number_only(failures):
+    out = _render_quota(30.0, [0.1] * 70 + [50.0] * 14, 84)
+    if ARROW_UP in out or ARROW_DOWN in out or ON_TARGET_GLYPH in out:
+        failures.append(f"format_quota must be number-only now; got {out!r}")
+    if "wk:" not in out:
+        failures.append(f"format_quota should still render wk:; got {out!r}")
+
+
+def _check_quota_number_color_bands(failures):
+    # The last space-separated token is the pace delta (_fmt_delta), now a gradient.
+    green = _render_quota(30.0, [], 84).rsplit(" ", 1)[-1]
+    if not green.startswith(ramp_color(0.0)):
         failures.append(
-            f"verbose mode should show two slash-separated deltas; got {out!r}"
+            f"large surplus delta should be green-end gradient; got {green!r}"
         )
-    if ARROW_UP in out or ARROW_DOWN in out:
-        failures.append(f"verbose mode should drop the arrow; got {out!r}")
-
-
-def _pace_segment(out):
-    """The pace portion of 'wk: <colored P%> <colored delta>'.
-
-    The 'P%' badge is colored independently by color_high_bad, so we slice it
-    off and assert only on the trailing pace number's color. With an empty
-    hourly walk there is no arrow, so the segment holds just the number.
-    """
-    return out.rsplit(" ", 1)[-1]
-
-
-def _check_number_color_bands(failures):
-    """The cumulative-pace NUMBER is colored by its own threshold band.
-    Empty hourly => no arrow, so the trailing segment is just the number."""
-    from statusline_lib.base import YELLOW
-
-    green = _pace_segment(_render(30.0, [], 84))  # large surplus
-    if GREEN not in green or YELLOW in green or RED in green:
-        failures.append(f"large surplus should be GREEN only; got {green!r}")
-    yellow = _pace_segment(
-        _render(49.0, [], 84)
-    )  # small surplus (~+3.4h, inside 8.4h buffer)
-    if YELLOW not in yellow or GREEN in yellow or RED in yellow:
-        failures.append(f"small surplus should be YELLOW only; got {yellow!r}")
-    red = _pace_segment(_render(60.0, [], 84))  # deficit (runs out before reset)
-    if RED not in red:
-        failures.append(f"deficit should be RED; got {red!r}")
+    red = _render_quota(60.0, [], 84).rsplit(" ", 1)[-1]
+    if not red.startswith(ramp_color(1.0)):
+        failures.append(f"deficit delta should be red-end gradient; got {red!r}")
     if RESET not in green:
         failures.append("colored output must reset")
 
 
-def _check_on_target_glyph(failures):
-    """Both signals within margin AND warmup done => green reward glyph, no arrow.
-    Flat burn at util=50, 84h into a 7-day week: cumulative delta ~0 AND current-
-    rate delta ~0 (flat burn at exactly half-used/half-elapsed lands on reset)."""
-    out = _render(50.0, [1.0] * 84, 84)
+def _check_needle_hot_up(failures):
+    out = _render_needle(30.0, [0.1] * 70 + [50.0] * 14, 84)
+    if ARROW_UP not in out:
+        failures.append(f"hot recent rate should yield an up arrow; got {out!r}")
+
+
+def _check_needle_cool_down(failures):
+    out = _render_needle(60.0, [50.0] * 14 + [0.1] * 70, 84)
+    if ARROW_DOWN not in out:
+        failures.append(f"cooling recent rate should yield a down arrow; got {out!r}")
+
+
+def _check_needle_on_target(failures):
+    out = _render_needle(50.0, [1.0] * 84, 84)
     if ON_TARGET_GLYPH not in out:
         failures.append(
-            f"on-target (both deltas ~0, warmup done) should show the reward glyph; got {out!r}"
+            f"both deltas ~0 + warmup done should show the glyph; got {out!r}"
         )
     if ARROW_UP in out or ARROW_DOWN in out:
-        failures.append(f"on-target should replace the arrow, not show it; got {out!r}")
+        failures.append(f"on-target should replace the arrow; got {out!r}")
 
 
-def _check_on_target_warmup_guard(failures):
-    """Near-zero deltas DURING warmup must NOT earn the glyph (the zero is the
-    prior shrinking deltas, not real on-pace burn). util chosen so cumulative ~0
-    at 10h elapsed, but 10h < 18h warmup => glyph suppressed."""
-    out = _render(100.0 * 10 / 168, [1.0] * 10, 10)
-    if ON_TARGET_GLYPH in out:
-        failures.append(
-            f"glyph must be suppressed during warmup (elapsed<warmup); got {out!r}"
-        )
-
-
-def _check_off_target_no_glyph(failures):
-    """'Both signals' rule: cumulative ~0 but a HOT recent rate (diverging) must
-    NOT earn the glyph."""
-    out = _render(50.0, [0.1] * 70 + [50.0] * 14, 84)  # cumulative ~0, current-rate hot
-    if ON_TARGET_GLYPH in out:
-        failures.append(
-            f"diverging current rate should NOT earn the glyph; got {out!r}"
-        )
+def _check_needle_empty_window(failures):
+    out = _render_needle(40.0, [], 84)
+    if ARROW_UP in out or ARROW_DOWN in out:
+        failures.append(f"empty window should omit the arrow; got {out!r}")
 
 
 def check(failures):
-    _check_hot_rate_up_arrow(failures)
-    _check_cool_rate_down_arrow(failures)
-    _check_no_dollars_no_arrow(failures)
-    _check_verbose_two_numbers(failures)
-    _check_number_color_bands(failures)
-    _check_on_target_glyph(failures)
-    _check_on_target_warmup_guard(failures)
-    _check_off_target_no_glyph(failures)
+    _check_quota_is_number_only(failures)
+    _check_quota_number_color_bands(failures)
+    _check_needle_hot_up(failures)
+    _check_needle_cool_down(failures)
+    _check_needle_on_target(failures)
+    _check_needle_empty_window(failures)
 
 
 def main():
@@ -163,9 +116,7 @@ def main():
         for failure in failures:
             print(f"FAIL: {failure}")
         sys.exit(1)
-    print(
-        "OK: weekly render shows pace number + current-rate arrow (verbose swaps in 2nd number)"
-    )
+    print("OK: format_quota is number-only; weekly_needle carries the arrow/glyph")
 
 
 if __name__ == "__main__":

@@ -43,6 +43,7 @@ from .base import (
     CTX_DENOM,
     GREEN,
     ORANGE,
+    RAMP,
     RED,
     RESET,
     YELLOW,
@@ -50,6 +51,8 @@ from .base import (
     color_high_bad,
     color_high_good,
     fmt,
+    ramp_color,
+    ramp_color_for,
 )
 from .beacon import (
     _BEACON_BLOCK_RE,
@@ -72,6 +75,17 @@ from .beacon import (
     _scan_beacon_anchors,
     format_beacon,
     format_calibrated_eta,
+)
+from .burnrate import (
+    RATE_COLOR,
+    _daily_budget,
+    _five_min_rate,
+    _has_quota,
+    _local_midnight_unix,
+    _sum_window_spend,
+    _window_spend_cached,
+    format_burn_rate,
+    format_day_budget,
 )
 from .cost import (
     _COST_DRIFT_MAJOR_THRESHOLD,
@@ -122,7 +136,9 @@ from .pace import (
     _walk_hourly_parallel,
     _walk_pace_hourly,
     _walk_session_hourly,
+    _weekly_deltas,
     format_quota,
+    weekly_needle,
 )
 from .sessions import (
     _SESSION_DEBOUNCE_DWELL_SECONDS,
@@ -153,6 +169,7 @@ __all__ = [
     "GREEN",
     "ORANGE",
     # base
+    "RAMP",
     "RED",
     "RED_MARGIN_TOKENS",
     "RESET",
@@ -166,13 +183,18 @@ __all__ = [
     "fmt",
     # beacon
     "format_beacon",
+    "format_burn_rate",
     "format_cache",
     "format_calibrated_eta",
     "format_context",
     "format_cost",
     "format_cost_with_subagents",
+    "format_day_budget",
     "format_model_badge",
     # pace
     "format_quota",
+    "ramp_color",
+    "ramp_color_for",
     "walk_transcript",
+    "weekly_needle",
 ]

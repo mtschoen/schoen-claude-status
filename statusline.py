@@ -28,10 +28,12 @@ from statusline_lib import (
     count_active_sessions,
     debounce_session_count,
     format_beacon,
+    format_burn_rate,
     format_cache,
     format_calibrated_eta,
     format_context,
     format_cost_with_subagents,
+    format_day_budget,
     format_model_badge,
     format_quota,
     walk_transcript,
@@ -160,6 +162,12 @@ def main():
     # --- Quota: 5h + weekly utilization with pace projection.
     quota_summary = format_quota(d.get("rate_limits"))
 
+    # --- Burn rate: live 5-min $/min + needle (subscription weekly or API-key budget).
+    burnrate_summary = format_burn_rate(d.get("rate_limits"))
+
+    # --- Daily budget (API-key only): since-midnight spend vs STATUSLINE_DAILY_BUDGET.
+    day_budget_summary = format_day_budget(d.get("rate_limits"))
+
     spinner = _SPINNER_FRAMES[int(time.time() * 4) % len(_SPINNER_FRAMES)]
     line1 = _line1(d, cwd, spinner)
 
@@ -170,6 +178,8 @@ def main():
             context_summary,
             cache_summary,
             quota_summary,
+            day_budget_summary,
+            burnrate_summary,
             cost_summary,
         )
         if s

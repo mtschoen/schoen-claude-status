@@ -9,3 +9,6 @@ __pycache__/
 # Dev-tooling deps (aislop) — pinned via package.json + package-lock.json,
 # installed with `npm ci --ignore-scripts`; the tree itself is not committed.
 node_modules/
+
+# aislop per-run artifacts (session/history logs; .aislop/config.yml stays tracked)
+.aislop/*.jsonl

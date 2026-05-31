@@ -11,7 +11,7 @@ import json
 import os
 from datetime import UTC, datetime
 
-from .base import GREEN, RED, RESET, YELLOW, _json_loads, color_high_bad
+from .base import GREEN, RESET, _json_loads, color_high_bad, ramp_color_for
 from .cost import _cost_for_turn
 from .project import is_on_target, project_delta
 from .walker import _walker_root_list
@@ -21,9 +21,9 @@ from .walker import _walker_root_list
 ARROW_UP = "↑"
 ARROW_DOWN = "↓"
 
-# On-target reward: shown when BOTH pace signals land within
-# _ON_TARGET_MARGIN_SECONDS of a perfect reset-time finish (and warmup is done).
-ON_TARGET_GLYPH = "☯"
+# On-target reward: both signals within _ON_TARGET_MARGIN_SECONDS of reset-time finish.
+# U+FE0E = text-presentation selector; keeps yin-yang monochrome so ANSI green wins.
+ON_TARGET_GLYPH = "☯︎"
 _ON_TARGET_MARGIN_SECONDS = 4 * 3600
 
 
@@ -221,12 +221,10 @@ def _fmt_delta_hours(seconds):
 
 
 def _delta_color(delta, warn_threshold):
-    if delta < 0:
-        return RED
-    # 0 = exactly on track; still 'warn' (inside the buffer band) up to warn_threshold
-    if delta <= warn_threshold:
-        return YELLOW
-    return GREEN
+    """Gradient on surplus seconds: solid green at/above warn_threshold, ramps
+    through yellow to red at 0 (or negative). Higher surplus is better, so
+    warn_threshold is the green edge and 0 the red edge."""
+    return ramp_color_for(delta, warn_threshold, 0)
 
 
 def _fmt_delta(delta, warn_threshold):
@@ -246,51 +244,88 @@ def _rate_arrow(cumulative_delta, current_rate_delta, warn_threshold):
     return f"{_delta_color(current_rate_delta, warn_threshold)}{direction}{RESET}"
 
 
-def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
-    """Returns ' <±Hh>[arrow]' (colored) or '' if not enough data.
-
-    5h window (use_trailing=False): pure in-window run-rate, unchanged.
-    Weekly (use_trailing=True): cumulative-pace number + a colored current-rate
-    arrow, both sourced from the current window via project.project_delta over an
-    hourly burn series. STATUSLINE_VERBOSE_PACE shows both numeric deltas instead
-    of the arrow.
+def _weekly_deltas(util, resets_at_unix, period_seconds):
+    """(cumulative_delta, current_rate_delta, warn_threshold, elapsed) for the
+    weekly window, or None when there isn't enough data. Deltas are seconds vs
+    reset (positive = surplus). Shared by the wk: number and the relocated needle.
     """
     if util is None or util <= 0 or not resets_at_unix:
-        return ""
+        return None
+    reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
+    remaining = (reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)).total_seconds()
+    elapsed = period_seconds - remaining
+    if elapsed <= 0 or remaining <= 0:
+        return None
+    warn_threshold = 0.05 * period_seconds
+    win_start = resets_at_unix - period_seconds
+    hourly = _pace_hourly_cached(win_start)
+    cumulative_delta, current_rate_delta = project_delta(
+        hourly, util, elapsed, remaining, period_seconds
+    )
+    if cumulative_delta is None:
+        return None
+    return cumulative_delta, current_rate_delta, warn_threshold, elapsed
+
+
+def weekly_needle(rate_limits):
+    """The relocated subscription needle: colored current-rate arrow, or the
+    on-target yin-yang, computed from the weekly window. "" when unavailable.
+
+    STATUSLINE_VERBOSE_PACE renders both numeric deltas instead of the glyph.
+    """
+    # Best-effort: malformed rate_limits degrades to no needle, not a raise
+    # (same guard _project_pace kept around this computation before it moved here).
     try:
-        reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
-        remaining = (
-            reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)
-        ).total_seconds()
-        elapsed = period_seconds - remaining
-        if elapsed <= 0 or remaining <= 0:
+        rl = rate_limits or {}
+        w = rl.get("seven_day") or {}
+        deltas = _weekly_deltas(w.get("used_percentage"), w.get("resets_at"), 7 * 86400)
+        if deltas is None:
             return ""
-        warn_threshold = 0.05 * period_seconds
-
-        if not use_trailing:
-            delta = 100.0 * elapsed / util - period_seconds
-            return f" {_fmt_delta(delta, warn_threshold)}"
-
-        win_start = resets_at_unix - period_seconds
-        hourly = _pace_hourly_cached(win_start)
-        cumulative_delta, current_rate_delta = project_delta(
-            hourly, util, elapsed, remaining, period_seconds
-        )
-        if cumulative_delta is None:
-            return ""
-        number = _fmt_delta(cumulative_delta, warn_threshold)
+        cumulative_delta, current_rate_delta, warn_threshold, elapsed = deltas
         verbose = os.environ.get("STATUSLINE_VERBOSE_PACE") not in (None, "", "0")
         if verbose and current_rate_delta is not None:
-            # only show two numbers when the second (current-rate) delta is available
-            return f" {number}/{_fmt_delta(current_rate_delta, warn_threshold)}"
+            return (
+                f" {_fmt_delta(cumulative_delta, warn_threshold)}"
+                f"/{_fmt_delta(current_rate_delta, warn_threshold)}"
+            )
         if is_on_target(
             cumulative_delta,
             current_rate_delta,
             elapsed,
             margin_seconds=_ON_TARGET_MARGIN_SECONDS,
         ):
-            return f" {number}{GREEN}{ON_TARGET_GLYPH}{RESET}"
-        return f" {number}{_rate_arrow(cumulative_delta, current_rate_delta, warn_threshold)}"
+            return f"{GREEN}{ON_TARGET_GLYPH}{RESET}"
+        return _rate_arrow(cumulative_delta, current_rate_delta, warn_threshold)
+    except Exception:
+        return ""
+
+
+def _project_pace(util, resets_at_unix, period_seconds, use_trailing=False):
+    """Returns ' <+-Hh>' (colored cumulative pace) or '' if not enough data.
+
+    The current-rate arrow / on-target glyph no longer live here -- they moved to
+    the burn-rate field via pace.weekly_needle. This function now renders only the
+    cumulative-pace number for both the 5h and weekly windows.
+    """
+    if util is None or util <= 0 or not resets_at_unix:
+        return ""
+    try:
+        if not use_trailing:
+            reset_dt = datetime.fromtimestamp(resets_at_unix, tz=UTC)
+            remaining = (
+                reset_dt - datetime.fromtimestamp(_now_unix(), tz=UTC)
+            ).total_seconds()
+            elapsed = period_seconds - remaining
+            if elapsed <= 0 or remaining <= 0:
+                return ""
+            warn_threshold = 0.05 * period_seconds
+            delta = 100.0 * elapsed / util - period_seconds
+            return f" {_fmt_delta(delta, warn_threshold)}"
+        deltas = _weekly_deltas(util, resets_at_unix, period_seconds)
+        if deltas is None:
+            return ""
+        cumulative_delta, _current, warn_threshold, _elapsed = deltas
+        return f" {_fmt_delta(cumulative_delta, warn_threshold)}"
     except Exception:
         return ""
 
