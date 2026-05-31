@@ -36,6 +36,7 @@ from statusline_lib import (
     format_quota,
     walk_transcript,
 )
+from statusline_lib.nudge import write_ctx_state
 
 _INPUT_LOG = os.path.expanduser("~/.claude/.statusline-input.log")
 _ERROR_LOG = os.path.expanduser("~/.claude/.statusline-error.log")
@@ -136,6 +137,9 @@ def main():
     model_id = (d.get("model") or {}).get("id") or ""
     model_summary = format_model_badge(model_id)
     context_summary = format_context(ctx_used, window_size, model_id)
+
+    # Bridge occupancy to the 200K /wrap nudge hook (its payload can't see it).
+    write_ctx_state(d.get("session_id") or "", ctx_used, window_size, time.time())
 
     # --- Cache: stdin only carries the current turn, so walk the session
     # transcript + every subagent JSONL to sum across all assistant turns.

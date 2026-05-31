@@ -261,6 +261,44 @@ If you want progress bars, themes, or powerline glyphs,
 want pace tracking with burn-rate % deltas,
 [claude-pace](https://github.com/Astro-Han/claude-pace) is great.
 
+## 200K-token /wrap nudge
+
+On the Opus 1M-context tier, input is billed at roughly **2× above 200K
+tokens** — the same boundary the context field colors yellow. Past it, a long
+session is quietly twice as expensive per turn, which is a natural moment to
+wind down. This repo ships an optional [`UserPromptSubmit`
+hook](https://code.claude.com/docs/en/hooks) that injects a **one-shot**,
+gentle reminder to the agent — "you've crossed 200K, consider suggesting
+`/wrap`" — the first time a session crosses the line.
+
+It does **not** run `/wrap` or interrupt anything; it only nudges the agent to
+*offer* a wrap at the next natural stopping point. Wrap stays user-initiated.
+
+**How it works.** A `UserPromptSubmit` hook's payload can't see context-window
+occupancy, but the statusline's payload can. So `statusline.py` writes the live
+occupancy to a per-session file under `~/.claude/state/` on each render, and the
+`nudge_200k.py` hook reads that file (no transcript walk) when you submit a
+prompt. A per-session marker file makes it fire at most once. Both files are
+keyed by session id, so concurrent sessions never cross signals.
+
+`install.sh` / `install.bat` register the hook alongside the two statuslines,
+preserving every other hook already in your `settings.json`. The equivalent
+manual entry is:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3 ~/schoen-claude-status/nudge_200k.py" } ] }
+    ]
+  }
+}
+```
+
+Set `CLAUDE_STATE_DIR` to relocate the state and marker files (the test suite
+uses this to avoid touching real state). The threshold and message text live in
+`statusline_lib/nudge.py`.
+
 ## Logs
 
 The script truncate-writes the latest stdin payload to

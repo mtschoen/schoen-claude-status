@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Check syntax
-        run: python -m py_compile statusline.py subagent_statusline.py install.py statusline_lib/*.py
+        run: python -m py_compile statusline.py subagent_statusline.py install.py nudge_200k.py statusline_lib/*.py
       - name: Lint (ruff)
         # The validation gate. Config lives in pyproject.toml; 0 findings is
         # the bar. This step is the hard gate that blocks merge on regression.

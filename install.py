@@ -1,11 +1,14 @@
-"""Wire statusLine + subagentStatusLine into ~/.claude/settings.json.
+"""Wire statusLine + subagentStatusLine + the 200K /wrap nudge hook into
+~/.claude/settings.json.
 
-Idempotent: re-running just refreshes the two `command` strings; every other
-key in settings.json is preserved verbatim. If both entries already match what
-we'd write, it reports "already current" and exits without touching the file.
-Both entries are written together
-because the two scripts are paired -- the lead and per-agent renderings share
-formatting code, so installing one without the other gives a mismatched UI.
+Idempotent: re-running just refreshes the `command` strings; every other key in
+settings.json -- including any other UserPromptSubmit hooks -- is preserved
+verbatim. If all three entries already match what we'd write, it reports
+"already current" and exits without touching the file. The two statuslines are
+written together because they are paired -- the lead and per-agent renderings
+share formatting code, so installing one without the other gives a mismatched
+UI. The nudge hook is the consumer of the per-session occupancy file the
+statusline produces, so it installs in the same pass.
 
 Usage (typically via the install.sh / install.bat wrappers):
     python install.py --repo /abs/path/to/repo [--settings PATH] [--dry-run]
@@ -92,6 +95,47 @@ def _commands_for_platform(repo):
     )
 
 
+def _nudge_command(repo):
+    """Platform-aware command for the UserPromptSubmit 200K /wrap nudge hook.
+    Hooks run once per prompt (not per render), so the portable python3/py
+    invocation is fine here -- no .sh speed wrapper like the statuslines use."""
+    target = f"{repo}/nudge_200k.py"
+    command = f'py -3 "{target}"' if os.name == "nt" else f'python3 "{target}"'
+    return target, command
+
+
+# Substring that identifies our hook entry among any other UserPromptSubmit
+# hooks the user has configured, so install updates ours in place.
+_NUDGE_MARKER = "nudge_200k.py"
+
+
+def _find_nudge_hook(settings):
+    """Return our existing UserPromptSubmit nudge hook dict, or None."""
+    for group in (settings.get("hooks") or {}).get("UserPromptSubmit") or []:
+        for hook in group.get("hooks") or []:
+            if _NUDGE_MARKER in (hook.get("command") or ""):
+                return hook
+    return None
+
+
+def _nudge_hook_current(settings, command):
+    """True iff our nudge hook is already present with exactly `command`."""
+    hook = _find_nudge_hook(settings)
+    return bool(hook) and hook.get("command") == command
+
+
+def _merge_nudge_hook(settings, command):
+    """Insert or update the nudge hook, preserving every other hook entry.
+    Updates ours in place if present, else appends a new matcher group."""
+    existing = _find_nudge_hook(settings)
+    if existing is not None:
+        existing["type"] = "command"
+        existing["command"] = command
+        return
+    groups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+    groups.append({"hooks": [{"type": "command", "command": command}]})
+
+
 def _report_walker(repo):
     # Optional native pace-walker (claude-walker). Pure speedup -- the Python
     # fallback runs identically when it isn't found.
@@ -122,8 +166,9 @@ def main():
     main_target, subagent_target, main_command, subagent_command = (
         _commands_for_platform(repo)
     )
+    nudge_target, nudge_command = _nudge_command(repo)
 
-    for script in (main_target, subagent_target):
+    for script in (main_target, subagent_target, nudge_target):
         if not os.path.exists(script):
             print(f"error: expected file not found: {script}", file=sys.stderr)
             print("  (is --repo pointing at a complete checkout?)", file=sys.stderr)
@@ -150,6 +195,7 @@ def main():
     already_current = (
         settings.get("statusLine") == desired_statusline
         and settings.get("subagentStatusLine") == desired_subagent
+        and _nudge_hook_current(settings, nudge_command)
     )
 
     if already_current:
@@ -159,11 +205,13 @@ def main():
             print(f"already current: {settings_path}")
             print(f"  statusLine:         {main_command}")
             print(f"  subagentStatusLine: {subagent_command}")
+            print(f"  UserPromptSubmit:   {nudge_command}")
             print("Nothing to do.")
         return 0
 
     settings["statusLine"] = desired_statusline
     settings["subagentStatusLine"] = desired_subagent
+    _merge_nudge_hook(settings, nudge_command)
 
     if args.dry_run:
         print(f"# would write to {settings_path}")
@@ -174,6 +222,7 @@ def main():
     print(f"updated {settings_path}")
     print(f"  statusLine:         {main_command}")
     print(f"  subagentStatusLine: {subagent_command}")
+    print(f"  UserPromptSubmit:   {nudge_command}")
 
     _report_walker(repo)
 

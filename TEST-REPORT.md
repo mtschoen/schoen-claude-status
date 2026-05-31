@@ -1,10 +1,13 @@
-schoen-claude-status test report — 2026-05-30T03:19:15Z
+schoen-claude-status test report — 2026-05-31T04:54:17Z
 ═══════════════════════════════════════════════════════
 
 Status:   PASS
-Mode:     close-the-gap (lint + AI-slop gate stand-up)
-Tests:    6 verify_*.py scripts — all passing
-Git:      6603409 (aislop wired as a hard CI gate)
+Mode:     feature add (200K /wrap nudge hook)
+Tests:    7 verify_*.py scripts — all passing (added verify_nudge_200k.py:
+          threshold gate, one-shot marker, per-session keying, corrupt/absent
+          state, and an end-to-end subprocess run of nudge_200k.py)
+Git:      base 3ae3ac5 (main) + 200K /wrap nudge (statusline writes per-session
+          occupancy; nudge_200k.py UserPromptSubmit hook consumes it)
 
 Lint:     ruff          0 findings  ✓  (hard gate: `ruff check .` + `ruff format --check .`)
           aislop        100 / 100   ✓  (hard gate: `npx aislop@0.9.4 ci .`, failBelow 90)
