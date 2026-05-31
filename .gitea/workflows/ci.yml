@@ -81,3 +81,66 @@ jobs:
             python "$t" || fail=1
           done
           exit $fail
+
+  test-windows:
+    name: Unit tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      # Node-based actions (checkout) can't verify Gitea's mkcert root on the
+      # Windows runner; bypass per local-ci project-ci-setup.md "Self-signed cert".
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+      # Force UTF-8 so the statusline's glyphs (yin-yang, arrows, dots) don't trip
+      # UnicodeEncodeError on the Windows console's cp1252 codepage.
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python 3.11 (python-build-standalone)
+        # setup-python@v5 and the python.org MSI both fail under the SYSTEM-account
+        # WinSW runner (WOW64 path redirection / SYSTEM ACLs break registration);
+        # the portable tarball just unpacks with the runner's tar.exe. See local-ci
+        # docs/project-ci-setup.md "Python install on the Windows runner".
+        shell: pwsh
+        run: |
+          $pyDir = "C:\hostedtoolcache\Python311"
+          if (-not (Test-Path "$pyDir\python.exe")) {
+            $url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260414/cpython-3.11.15+20260414-x86_64-pc-windows-msvc-install_only.tar.gz"
+            $tar = Join-Path $env:RUNNER_TEMP "python-3.11.tar.gz"
+            Invoke-WebRequest -Uri $url -OutFile $tar -UseBasicParsing
+            New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+            tar -xzf $tar -C $pyDir --strip-components=1
+            if (-not (Test-Path "$pyDir\python.exe")) {
+              throw "tar extracted but python.exe not at $pyDir\python.exe"
+            }
+          }
+          & "$pyDir\python.exe" --version
+          "$pyDir"         | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$pyDir\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install optional runtime deps
+        # psutil exercises the real process-enumeration path in the active-session
+        # check instead of the mtime fallback (matches the Linux test job).
+        shell: pwsh
+        run: pip install psutil
+
+      - name: Check syntax (py_compile)
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem statusline_lib/*.py | ForEach-Object { $_.FullName }
+          $files += 'statusline.py', 'subagent_statusline.py', 'install.py', 'nudge_200k.py'
+          python -m py_compile @files
+
+      - name: Run verification scripts
+        # The same scripts/verify_*.py suite the Linux job runs, on Windows. Collect
+        # failures so one bad script doesn't mask the others, then fail if any did.
+        shell: pwsh
+        run: |
+          $fail = 0
+          Get-ChildItem scripts/verify_*.py | ForEach-Object {
+            Write-Host "=== $($_.Name) ==="
+            python $_.FullName
+            if ($LASTEXITCODE -ne 0) { $fail = 1 }
+          }
+          exit $fail
