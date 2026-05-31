@@ -87,9 +87,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      # Node-based actions (checkout) can't verify Gitea's mkcert root on the
-      # Windows runner; bypass per local-ci project-ci-setup.md "Self-signed cert".
-      NODE_TLS_REJECT_UNAUTHORIZED: '0'
       # Force UTF-8 so the statusline's glyphs (yin-yang, arrows, dots) don't trip
       # UnicodeEncodeError on the Windows console's cp1252 codepage.
       PYTHONUTF8: '1'
