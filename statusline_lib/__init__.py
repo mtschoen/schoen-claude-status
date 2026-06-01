@@ -116,6 +116,11 @@ from .cost import (
     format_cost,
     format_cost_with_subagents,
     format_model_badge,
+    format_qwen_api_stats,
+    format_qwen_cache,
+    format_qwen_files,
+    format_qwen_thinking,
+    format_qwen_tokens,
     walk_transcript,
 )
 from .pace import (
@@ -191,6 +196,12 @@ __all__ = [
     "format_cost_with_subagents",
     "format_day_budget",
     "format_model_badge",
+    # Qwen Code formatters
+    "format_qwen_api_stats",
+    "format_qwen_cache",
+    "format_qwen_files",
+    "format_qwen_thinking",
+    "format_qwen_tokens",
     # pace
     "format_quota",
     "ramp_color",

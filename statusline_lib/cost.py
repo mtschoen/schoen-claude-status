@@ -342,6 +342,9 @@ _MODEL_BADGES = [
     (("opus",), "opus", "\x1b[35m"),  # magenta
     (("sonnet",), "sonnet", "\x1b[36m"),  # cyan
     (("haiku",), "haiku", "\x1b[34m"),  # blue
+    # Qwen model families (for Qwen Code port)
+    (("qwen-coder", "qwen2.5-coder"), "qwen-coder", "\x1b[96m"),  # bright cyan
+    (("qwen",), "qwen", "\x1b[94m"),  # bright blue
 ]
 
 
@@ -354,12 +357,28 @@ def _version_for(mid, key):
     return f"{match.group(1)}.{match.group(2)}" if match else ""
 
 
+def _qwen_version_for(mid):
+    """Extract version from Qwen model names like 'qwen-3-235b' -> '3',
+    'qwen2.5-72b' -> '2.5'. Returns "" when no version is found."""
+    match = _re.search(r"qwen[-_]?(\d+(?:\.\d+)?)", mid)
+    return match.group(1) if match else ""
+
+
+def _qwen_size_for(mid):
+    """Extract parameter size from Qwen model names like 'qwen-3-235b' -> '235b',
+    'qwen-3-32b' -> '32b'. Returns "" when no size suffix is found."""
+    match = _re.search(r"(\d+[bBmM])(?:[-_]|$)", mid)
+    return match.group(1).lower() if match else ""
+
+
 def format_model_badge(model_id):
     """Colored short model-family badge, e.g. magenta `opus4.8[1m]`.
 
     Inserts the `major.minor` version when the id carries one and appends the
     `[1m]` runtime-tier suffix when present. Unknown families render as a mauve
     `?`; an empty id returns "" so the caller can omit the segment.
+
+    For Qwen models (e.g. 'qwen-3-235b'), shows version + size like 'qwen3·235b'.
     """
     if not model_id:
         return ""
@@ -368,6 +387,124 @@ def format_model_badge(model_id):
     for keys, label, color in _MODEL_BADGES:
         for key in keys:
             if key in mid:
+                if key.startswith("qwen"):
+                    version = _qwen_version_for(mid)
+                    size = _qwen_size_for(mid)
+                    size_part = f"·{size}" if size else ""
+                    return f"{color}{label}{version}{size_part}{RESET}"
                 version = _version_for(mid, key)
                 return f"{color}{label}{version}{suffix}{RESET}"
     return f"{CTX_DENOM}?{RESET}"
+
+
+# Qwen Code metrics formatters
+# These work with Qwen Code's metrics.models.<id>.tokens and .api structures
+#
+# Payload structure: {prompt, completion, total, cached, thoughts}
+# - `prompt` = total prompt tokens (includes cached reads)
+# - `cached` = cache_read_input_tokens (subset of prompt)
+# - `completion` = output tokens
+# - `thoughts` = reasoning/thinking tokens
+#
+# Cache uses the same format as Claude Code: read / write / hit%
+# Thinking tokens are appended to the context column as (thk NNNK)
+
+
+def format_qwen_cache(cached, prompt):
+    """Format cache as Claude Code style: `read / write / hit%`.
+
+    Qwen doesn't expose cache writes, so write is always 0.
+    Hit rate = cached / prompt.
+    Returns: e.g. `1.78M / 660K / 73%` or "" if no cached data.
+    """
+    if not cached or cached <= 0:
+        return ""
+    # For Qwen, cached = cache reads, non-cached = prompt - cached
+    non_cached = max(0, prompt - cached)
+    hit_pct = cached * 100.0 / prompt if prompt > 0 else 0
+
+    return (
+        f"{CACHE_READ}{fmt(cached)}{RESET} / "
+        f"{CACHE_WRITE}{fmt(non_cached)}{RESET} / "
+        f"{color_high_good(hit_pct, 90, 75)}"
+    )
+
+
+def format_qwen_tokens(tokens):
+    """Format Qwen Code token metrics as plain arrows (no emojis).
+
+    Input: {"prompt": N, "completion": N, "total": N, "cached": N, "thoughts": N}
+    Returns: colored string like "↑2.44M ↓35.2K" or "" if empty.
+    Matches Claude Code statusline: ↑ for input, ↓ for output.
+    """
+    if not tokens:
+        return ""
+    prompt = int(tokens.get("prompt") or 0)
+    completion = int(tokens.get("completion") or 0)
+
+    parts = []
+    if prompt:
+        parts.append(f"↑{GREEN}{fmt(prompt)}{RESET}")
+    if completion:
+        parts.append(f"↓{YELLOW}{fmt(completion)}{RESET}")
+    return " ".join(parts) if parts else ""
+
+
+def format_qwen_thinking(tokens):
+    """Extract thinking tokens from Qwen metrics for the context column.
+
+    Input: {"prompt": N, "completion": N, "total": N, "cached": N, "thoughts": N}
+    Returns: colored string like "(thk 10.1K)" or "" if no thinking tokens.
+    """
+    if not tokens:
+        return ""
+    thoughts = int(tokens.get("thoughts") or 0)
+    if thoughts <= 0:
+        return ""
+    return f"{CTX_DENOM}(thk{fmt(thoughts)}){RESET}"
+
+
+def format_qwen_api_stats(api):
+    """Format Qwen Code API stats: requests, errors, latency.
+
+    Input: {"total_requests": N, "total_errors": N, "total_latency_ms": N}
+    Returns: colored string like "10req 0err 5.0s" or "" if empty.
+    """
+    if not api:
+        return ""
+    requests = int(api.get("total_requests") or 0)
+    errors = int(api.get("total_errors") or 0)
+    latency_ms = int(api.get("total_latency_ms") or 0)
+
+    if not requests:
+        return ""
+
+    parts = [f"{requests}req"]
+    if errors:
+        parts.append(f"{RED}{errors}err{RESET}")
+    if latency_ms:
+        latency_s = latency_ms / 1000.0
+        parts.append(f"{latency_s:.1f}s")
+    return " ".join(parts)
+
+
+def format_qwen_files(files):
+    """Format Qwen Code file change stats: lines added/removed.
+
+    Input: {"total_lines_added": N, "total_lines_removed": N}
+    Returns: colored string like "+120/-30" or "" if no changes.
+    """
+    if not files:
+        return ""
+    added = int(files.get("total_lines_added") or 0)
+    removed = int(files.get("total_lines_removed") or 0)
+
+    if not added and not removed:
+        return ""
+
+    parts = []
+    if added:
+        parts.append(f"{GREEN}+{added}{RESET}")
+    if removed:
+        parts.append(f"{RED}-{removed}{RESET}")
+    return "/".join(parts)
