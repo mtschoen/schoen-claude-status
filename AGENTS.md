@@ -20,3 +20,19 @@ support:
 
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#feat/csharp-support"`
+
+## Debugging the compact-mode width gate
+
+`statusline_lib/compact.py` auto-sheds line-2 fields only when the rendered width
+exceeds `$COLUMNS`. When auto-shrink looks broken, check the width source before
+the logic:
+
+- A `Bash`/shell subprocess does NOT inherit `COLUMNS`, so an `echo $COLUMNS`
+  from a tool call reads empty - that is NOT the value the statusline sees.
+- The live statusline subprocess DOES get it: Claude Code (>= 2.1.153, confirmed
+  on 2.1.160) sets `COLUMNS` to the terminal width before invoking the command.
+  Ground truth is logged per-render to `~/.claude/.statusline-cols-debug.log`
+  (and the raw stdin payload to `~/.claude/.statusline-input.log`).
+- So "shrinking never happens" usually just means the terminal is wider than
+  line 2 (e.g. 316 cols) - drag the window narrow, or force it with
+  `STATUSLINE_COMPACT=always`, to see fields drop in `DROP_ORDER`.
