@@ -11,10 +11,17 @@ try:
 except ImportError:
     _json_loads = json.loads
 
-RED = "\x1b[31m"
-YELLOW = "\x1b[33m"
-ORANGE = "\x1b[38;5;208m"  # mid-tier between yellow and red
-GREEN = "\x1b[32m"
+
+def _truecolor(r, g, b):
+    return f"\x1b[38;2;{r};{g};{b}m"
+
+
+# Threshold band on one brightness plane (175/#af) so ramped and solid colors
+# never differ in vividness; truecolor matches the ramp endpoints exactly.
+GREEN = _truecolor(0, 175, 0)  # #00af00
+YELLOW = _truecolor(175, 175, 0)  # #afaf00, olive
+ORANGE = _truecolor(175, 90, 0)  # #af5a00, between yellow and red
+RED = _truecolor(175, 0, 0)  # #af0000
 RESET = "\x1b[0m"
 # Identity colors (256-color) -- distinct from the threshold band so identity
 # never reads as a warning.
@@ -45,14 +52,23 @@ def color_high_good(pct, warn, danger, decimals=0):
     return f"{ramp_color_for(pct, warn, danger)}{format(pct, spec)}%{RESET}"
 
 
-# Green -> yellow -> red 256-color ramp; shared by burn rate, quota %, cache-hit %, pace deltas.
-RAMP = [46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196]
+# Green -> yellow -> red ramp anchors (RGB); shared by burn rate, quota %,
+# cache-hit %, pace deltas. Same 175/#af plane as the solid band above.
+RAMP = [(0, 175, 0), (175, 175, 0), (175, 0, 0)]
 
 
 def ramp_color(t):
-    """256-color escape on the green(0)->yellow->red(1) ramp for t, clamped to [0,1]."""
+    """Truecolor escape on the green(0)->yellow->red(1) ramp for t, clamped to
+    [0,1]; piecewise-linear between the RAMP anchors."""
     t = 0.0 if t < 0 else 1.0 if t > 1 else t
-    return f"\x1b[38;5;{RAMP[round(t * (len(RAMP) - 1))]}m"
+    position = t * (len(RAMP) - 1)
+    index = min(int(position), len(RAMP) - 2)
+    fraction = position - index
+    (r0, g0, b0), (r1, g1, b1) = RAMP[index], RAMP[index + 1]
+    r = round(r0 + (r1 - r0) * fraction)
+    g = round(g0 + (g1 - g0) * fraction)
+    b = round(b0 + (b1 - b0) * fraction)
+    return f"\x1b[38;2;{r};{g};{b}m"
 
 
 def ramp_color_for(value, warn, danger):

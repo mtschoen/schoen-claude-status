@@ -1,6 +1,7 @@
 """Verify the reusable green->yellow->red gradient helper in base.py.
 
-ramp_color(t) maps t in [0,1] onto a fixed 256-color ramp (green at 0, red at 1).
+ramp_color(t) maps t in [0,1] onto a truecolor ramp (green at 0, red at 1),
+piecewise-linear between the RGB anchors in RAMP.
 ramp_color_for(value, warn, danger) is banded: `warn` is the green edge and
 `danger` the red edge, with solid green/red plateaus beyond. It works for both
 high-bad (warn < danger) and high-good (warn > danger) orientations.
@@ -21,13 +22,18 @@ from statusline_lib.base import (
 )
 
 
+def _expected(rgb):
+    r, g, b = rgb
+    return f"\x1b[38;2;{r};{g};{b}m"
+
+
 def _check_endpoints(failures):
-    if ramp_color(0.0) != f"\x1b[38;5;{RAMP[0]}m":
+    if ramp_color(0.0) != _expected(RAMP[0]):
         failures.append("ramp_color(0.0) should be the green end of the ramp")
-    if ramp_color(1.0) != f"\x1b[38;5;{RAMP[-1]}m":
+    if ramp_color(1.0) != _expected(RAMP[-1]):
         failures.append("ramp_color(1.0) should be the red end of the ramp")
     mid = RAMP[round(0.5 * (len(RAMP) - 1))]
-    if ramp_color(0.5) != f"\x1b[38;5;{mid}m":
+    if ramp_color(0.5) != _expected(mid):
         failures.append("ramp_color(0.5) should be the ramp midpoint")
 
 
