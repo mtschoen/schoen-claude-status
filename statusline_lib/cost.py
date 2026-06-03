@@ -1,30 +1,22 @@
 """Cost calculation and transcript walking.
 
-Context/model-badge rendering moved to badge.py to keep this file
-within the 400-line guideline.
+The cost/cache *rendering* helpers (format_cache, format_ttl, format_cost,
+format_cost_with_subagents and their color/threshold constants) live in the
+sibling costfmt.py; this file keeps the transcript walk + per-turn
+accumulation. They were once one module - the split keeps each under the aislop
+400-line file gate. The package __init__ aggregates the public API from both, so
+callers use `statusline_lib.format_cache` / `statusline_lib.walk_transcript`
+regardless of which module defines them.
 
 Imports:
-  base  -- for color constants, _json_loads, fmt, color_high_good
-  badge -- for COMPACT_BUFFER_TOKENS, RED_MARGIN_TOKENS (re-exported here
-           for back-compat with external callers via statusline_lib.cost)
+  base -- _json_loads (the walk's only base dependency)
 """
 
 import glob
 import os
 from datetime import datetime
 
-from .base import (
-    CACHE_READ,
-    CACHE_WRITE,
-    GREEN,
-    ORANGE,
-    RED,
-    RESET,
-    YELLOW,
-    _json_loads,
-    color_high_good,
-    fmt,
-)
+from .base import _json_loads
 
 _RATES = {
     "opus": (5.0, 25.0),
@@ -76,12 +68,6 @@ def _written_ttl_seconds(usage):
     if hour or five_min:
         return TTL_1H_SECONDS if hour >= five_min else TTL_5M_SECONDS
     return TTL_1H_SECONDS
-
-
-# U+FE0E text-presentation selector keeps the warning glyph monochrome so the
-# ANSI red wins cross-platform (Windows Terminal would otherwise color-font it),
-# matching the on-target yin-yang's treatment.
-TTL_WARN_GLYPH = "⚠︎"
 
 
 def _rates_for(model_id):
@@ -142,9 +128,13 @@ def _accumulate_assistant_turn(entry, acc, seen_ids):
         acc["last_model"] = model_id
     rate_model = model_id or acc["last_model"]
     acc["cost"] += _cost_for_turn(u, rate_model)
-    inp_rate, _out_rate = _rates_for(rate_model)
+    inp_rate, out_rate = _rates_for(rate_model)
     acc["read_cost"] += r * inp_rate * 0.1 / 1_000_000.0
     acc["write_cost"] += w * inp_rate * 1.25 / 1_000_000.0
+    # The other two cost dimensions, so the full breakdown reconciles to total:
+    # fresh (uncached) input at the plain input rate, output at the output rate.
+    acc["input_cost"] += i * inp_rate / 1_000_000.0
+    acc["output_cost"] += o * out_rate / 1_000_000.0
     # TTL eviction: parent-only non-first turn with full rewrite (no read) above
     # floor AND an idle gap since the prior turn exceeding the TTL the prior turn's
     # cache was written with (so a seconds-later tool-array/compaction bust, and a
@@ -192,6 +182,9 @@ def walk_transcript(path, include_subagents=False):
 
     Returns:
       cache_read, cache_write, input_total, output_total -- session sums
+      read_cost, write_cost, input_cost, output_cost     -- the four $ components
+                                                            (sum = token cost; lets
+                                                            the full breakdown reconcile)
       cost                                               -- $, derived (parent + subagents)
       parent_cost, subagent_cost                         -- $ split (subagent_cost 0 unless include_subagents)
       last_model_id                                      -- model on most recent assistant turn
@@ -210,6 +203,8 @@ def walk_transcript(path, include_subagents=False):
         "cost": 0.0,
         "read_cost": 0.0,
         "write_cost": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
         "ttl_evictions": 0,
         "ttl_wasted": 0.0,
         "assistant_turns": 0,
@@ -245,6 +240,8 @@ def walk_transcript(path, include_subagents=False):
         "cost": acc["cost"],
         "read_cost": acc["read_cost"],
         "write_cost": acc["write_cost"],
+        "input_cost": acc["input_cost"],
+        "output_cost": acc["output_cost"],
         "ttl_evictions": acc["ttl_evictions"],
         "ttl_wasted": acc["ttl_wasted"],
         "parent_cost": parent_cost,
@@ -254,163 +251,3 @@ def walk_transcript(path, include_subagents=False):
         "last_cache_create": acc["last_cache_create"],
         "last_cache_read": acc["last_cache_read"],
     }
-
-
-def format_cache(
-    read,
-    write,
-    input_t,
-    read_cost=None,
-    write_cost=None,
-    show_costs=True,
-    show_hit=True,
-):
-    """`reads (cost) / writes (cost) / hit %`.
-
-    The per-figure $ parens render only when both cost args are supplied AND
-    `show_costs` (compact mode and the subagent caller pass neither/False, in
-    which case the output is byte-identical to the pre-cost format). The $ inside
-    each paren reuses that figure's identity color (teal read, orange write).
-    `show_hit=False` drops the trailing hit%.
-    """
-    total_in = read + write + input_t
-    if total_in <= 0:
-        return ""
-    with_costs = show_costs and read_cost is not None and write_cost is not None
-    read_part = f"{CACHE_READ}{fmt(read)}{RESET}"
-    write_part = f"{CACHE_WRITE}{fmt(write)}{RESET}"
-    if with_costs:
-        read_part += f" {CACHE_READ}(${read_cost:.2f}){RESET}"
-        write_part += f" {CACHE_WRITE}(${write_cost:.2f}){RESET}"
-    segment = f"{read_part} / {write_part}"
-    if show_hit:
-        hit_pct = read * 100.0 / total_in
-        segment += f" / {color_high_good(hit_pct, 90, 75)} hit"
-    return segment
-
-
-def format_ttl(evictions, wasted, show_wasted=True):
-    """Loud red cache-eviction counter, or "" when there were no evictions.
-
-    `⚠ TTL:N` plus ` (~$X.XX)` of estimated wasted spend when `show_wasted`.
-    Whole segment is red - it is a problem signal, not a routine metric.
-    """
-    if not evictions or evictions <= 0:
-        return ""
-    segment = f"{RED}{TTL_WARN_GLYPH} TTL:{evictions}{RESET}"
-    if show_wasted and wasted and wasted > 0:
-        segment += f" {RED}(~${wasted:.2f}){RESET}"
-    return segment
-
-
-def _cost_threshold_color(cost):
-    """Magnitude band shared by the parent figure and the subagent addend:
-    green < $25, yellow < $50, red >= $50."""
-    return RED if cost >= 50 else YELLOW if cost >= 25 else GREEN
-
-
-_SUM_COST_THRESHOLD_YELLOW = 35  # combined parent+subagent total >= this -> yellow
-_SUM_COST_THRESHOLD_RED = 70  # combined parent+subagent total >= this -> red
-
-
-def _sum_threshold_color(cost):
-    """Magnitude band for the combined parent+subagent total (the `= $total`
-    segment). Breakpoints sit higher than the per-figure bands
-    (_cost_threshold_color, 25/50): a total runs bigger than its parts, so
-    reusing 25/50 would peg the sum red on routine sessions. 35/70 splits the
-    difference -- it flags a combined burn that two individually-modest figures
-    can hide, without crying wolf."""
-    return (
-        RED
-        if cost >= _SUM_COST_THRESHOLD_RED
-        else YELLOW
-        if cost >= _SUM_COST_THRESHOLD_YELLOW
-        else GREEN
-    )
-
-
-def format_cost(cost):
-    if cost is None or cost <= 0:
-        return ""
-    return f"{_cost_threshold_color(cost)}${cost:.2f}{RESET}"
-
-
-# The subagent addend carries the same magnitude bands as the parent figure
-# (green/yellow/red via _cost_threshold_color). Its trailing "~" is the estimate
-# marker, and its COLOR is the drift signal -- grey when our formula tracks the
-# harness, else tinted by the DIRECTION and SEVERITY of the divergence:
-#   under-estimate (our_parent < authoritative -- shown cost low, you may pay MORE):
-#     * moderate (> 4%):  caution-orange
-#     * way off  (> 25%): deep red -- a structural miss (rate hike, a new billed
-#       dimension we don't model yet, or 1M-tier doubling); you may be paying
-#       WAY more than shown.
-#   over-estimate (our_parent > authoritative -- shown cost high, you pay LESS):
-#     * moderate (> 4%):  cyan -- reassuring
-#     * way off  (> 25%): bright pink -- our estimate is wildly high (e.g. a rate
-#       CUT we haven't caught -- Anthropic dropped Opus 3x at 4.5); you're paying
-#       WAY less than shown.
-# Thresholds are tight because our formula matches the harness's parent
-# total_cost_usd to the penny in practice, so even a few percent is a real signal.
-_SUBAGENT_COST_COLOR = "\x1b[38;5;245m"  # grey -- "~" tracks the harness
-_COST_DRIFT_UNDER_COLOR = ORANGE  # under, moderate: you may pay MORE
-_COST_DRIFT_UNDER_MAJOR_COLOR = "\x1b[38;5;124m"  # under, way off: deep red
-_COST_DRIFT_OVER_COLOR = "\x1b[38;5;51m"  # over, moderate: cyan, you pay LESS
-_COST_DRIFT_OVER_MAJOR_COLOR = "\x1b[38;5;198m"  # over, way off: bright pink
-_COST_DRIFT_THRESHOLD = 0.04  # flag at all
-_COST_DRIFT_MAJOR_THRESHOLD = 0.25  # "way off"
-
-
-def format_cost_with_subagents(authoritative_parent, our_parent, subagent_cost):
-    """Render `($parent + $sub~) = $total`: authoritative parent + estimated subagent
-    spend, then their sum.
-
-    The parent and subagent figures carry the same per-figure magnitude bands
-    (green/yellow/red via _cost_threshold_color). The trailing `= $total` is their
-    sum and carries its OWN, higher bands (_sum_threshold_color: green < $35,
-    yellow < $70, red >= $70) -- two individually-modest figures can add up to a
-    combined burn worth flagging that neither part shows alone. The parent is
-    the harness's authoritative `total_cost_usd` (ground truth, but PARENT-ONLY
-    -- subagents are invisible to it). The subagent figure is our formula's
-    estimate, marked with a trailing "~".
-
-    The "~" closes the loop on drift. Drift is a PARENT-side measurement:
-    `our_parent` is our formula over the same parent turns as the authoritative
-    figure, so a gap means our cost formula has diverged from the harness. We
-    tint the estimate marker by the DIRECTION and SEVERITY of that gap: grey when
-    it tracks the harness; over-estimate (shown high, you pay less) is cyan,
-    escalating to bright pink past 25%; under-estimate (shown low, you may pay
-    more) is caution-orange, escalating to deep red past 25%. The same formula
-    produces the subagent figure, so the direction carries over; it is NOT a
-    per-subagent measurement (no ground truth exists for subagents).
-
-    With no subagent cost the result is just the authoritative figure -- byte
-    identical to the pre-subagent behavior.
-    """
-    parent_part = format_cost(authoritative_parent)
-    if not subagent_cost or subagent_cost <= 0:
-        return parent_part
-    drift = 0.0
-    if authoritative_parent and authoritative_parent > 0:
-        drift = (our_parent - authoritative_parent) / authoritative_parent
-    magnitude = abs(drift)
-    major = magnitude > _COST_DRIFT_MAJOR_THRESHOLD
-    if magnitude <= _COST_DRIFT_THRESHOLD:
-        tilde_color = _SUBAGENT_COST_COLOR  # tracks the harness
-    elif drift > 0:  # over-estimate -> you pay LESS
-        tilde_color = _COST_DRIFT_OVER_MAJOR_COLOR if major else _COST_DRIFT_OVER_COLOR
-    else:  # under-estimate -> you may pay MORE
-        tilde_color = (
-            _COST_DRIFT_UNDER_MAJOR_COLOR if major else _COST_DRIFT_UNDER_COLOR
-        )
-    addend = (
-        f"{_cost_threshold_color(subagent_cost)}+ ${subagent_cost:.2f}{RESET}"
-        f"{tilde_color}~{RESET}"
-    )
-    body = f"{parent_part} {addend}" if parent_part else addend
-    # The sum is meaningful only when there's a parent figure to add to. With no
-    # authoritative parent (rare -- payload hasn't delivered a cost yet), `= $total`
-    # would just echo the subagent addend, so drop it but still surface the spend.
-    if not parent_part:
-        return body
-    total = authoritative_parent + subagent_cost
-    return f"({body}) {_sum_threshold_color(total)}= ${total:.2f}{RESET}"

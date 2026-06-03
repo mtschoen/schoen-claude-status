@@ -319,3 +319,45 @@ def format_calibrated_eta(raw_eta_seconds, period_seconds=604800):
     # The U+00D7 multiplication sign is deliberately rendered in the
     # status-line ETA badge; ASCII 'x' would change user-facing output.
     return f"~{cal_min}m calibrated ({float(bias):.1f}×)"  # noqa: RUF001
+
+
+# Muted grey: session timing is ambient context on line 3, not a warning.
+_SESSION_TIMING_COLOR = "\x1b[38;5;245m"
+
+
+def _fmt_duration_ms(milliseconds):
+    """Human duration from milliseconds: '45s' / '12m' / '1h08m'. '' for
+    None/non-numeric/<=0 so an absent figure simply drops out."""
+    try:
+        seconds = int(milliseconds) // 1000
+    except (TypeError, ValueError):
+        return ""
+    if seconds <= 0:
+        return ""
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, rem_min = divmod(minutes, 60)
+    return f"{hours}h{rem_min:02d}m"
+
+
+def format_session_timing(cost):
+    """`⏳ <wall> · <api> api` from the payload's `cost` durations, or "".
+
+    Wall = total_duration_ms (clock time the session has existed); api =
+    total_api_duration_ms (time spent in model calls), so the pair shows how
+    compute-bound the session is. Returns "" until a wall figure exists (brand
+    new session), and drops the `· <api>` tail when that figure is absent. The
+    ⏳ hourglass is deliberately distinct from the beacon's ⏱ turn timer so a
+    session total never reads as a live per-turn clock.
+    """
+    if not isinstance(cost, dict):
+        return ""
+    wall = _fmt_duration_ms(cost.get("total_duration_ms"))
+    if not wall:
+        return ""
+    api = _fmt_duration_ms(cost.get("total_api_duration_ms"))
+    body = f"⏳ {wall} · {api} api" if api else f"⏳ {wall}"
+    return f"{_SESSION_TIMING_COLOR}{body}{RESET}"

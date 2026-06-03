@@ -19,7 +19,14 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # super-minimal tier: the narrowest windows lose the whole live $/min field,
 # then the context window size and percentage, leaving the bare used-token
 # count and session cost.
+#
+# The two full-breakdown cache figures (output, then input) lead the list so the
+# widest-only extras shed first, leaving the read/write tokens, their $ parens,
+# and hit% -- the essential cache core -- as the last cache fields to drop.
 DROP_ORDER = [
+    "cache_output",
+    "cache_input",
+    "lines",
     "cache_costs",
     "burn_target",
     "cache_hit",
@@ -52,6 +59,15 @@ def _columns():
     except ValueError:
         return None
     return cols if cols > 0 else None
+
+
+def terminal_columns():
+    """Public accessor for the parsed `$COLUMNS` width (None if unset/invalid).
+
+    Lets line-1 fit checks (e.g. the optional session-name suffix) reuse the
+    same width source as line 2 without duplicating the parse.
+    """
+    return _columns()
 
 
 def _mode():

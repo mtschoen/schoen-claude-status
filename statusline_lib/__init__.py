@@ -1,7 +1,7 @@
 """Shared rendering helpers for the schoen-claude-status statuslines.
 
 Used by:
-  statusline.py            -- main session: 2-line layout
+  statusline.py            -- main session: up to 3-line layout
   subagent_statusline.py   -- per-agent panel rows: 1-line metrics
 
 Cost handling differs between the two callers:
@@ -26,7 +26,8 @@ Package layout (dependency order, no cycles):
   sessions -- session counting (psutil lazy), debounce state
   walker   -- binary discovery, root resolution, native pace bridge
   cost     -- cost calc, transcript walking, context/cache/model-badge formatting
-  beacon   -- beacon scanning, format_beacon, format_calibrated_eta
+  beacon   -- beacon scanning, format_beacon, format_calibrated_eta, session timing
+  diffstat -- format_lines (session +/- line counts for line 2)
   pace     -- pace walking, format_quota
 """
 
@@ -76,17 +77,20 @@ from .beacon import (
     _DRIFT_MATERIAL_ELAPSED_SECONDS,
     _DRIFT_MATERIAL_RATIO,
     _DRIFT_MODERATE_RATIO,
+    _SESSION_TIMING_COLOR,
     _apply_beacon,
     _bias_factor_cached,
     _compute_objective_drift,
     _find_beacon_anchors,
     _find_session_jsonl,
+    _fmt_duration_ms,
     _format_clock_and_elapsed,
     _iter_assistant_beacons,
     _iter_beacons_in_text,
     _scan_beacon_anchors,
     format_beacon,
     format_calibrated_eta,
+    format_session_timing,
 )
 from .burnrate import (
     RATE_COLOR,
@@ -103,33 +107,39 @@ from .compact import (
     DROP_ORDER,
     full_flags,
     resolve_flags,
+    terminal_columns,
     visible_width,
 )
 from .cost import (
+    _RATES,
+    _WEB_SEARCH_COST_USD,
+    TTL_MIN_WRITE_TOKENS,
+    _accumulate_assistant_turn,
+    _cost_for_turn,
+    _rates_for,
+    _walk_one_transcript,
+    walk_transcript,
+)
+from .costfmt import (
     _COST_DRIFT_MAJOR_THRESHOLD,
     _COST_DRIFT_OVER_COLOR,
     _COST_DRIFT_OVER_MAJOR_COLOR,
     _COST_DRIFT_THRESHOLD,
     _COST_DRIFT_UNDER_COLOR,
     _COST_DRIFT_UNDER_MAJOR_COLOR,
-    _RATES,
     _SUBAGENT_COST_COLOR,
     _SUM_COST_THRESHOLD_RED,
     _SUM_COST_THRESHOLD_YELLOW,
-    _WEB_SEARCH_COST_USD,
-    TTL_MIN_WRITE_TOKENS,
     TTL_WARN_GLYPH,
-    _accumulate_assistant_turn,
-    _cost_for_turn,
     _cost_threshold_color,
-    _rates_for,
     _sum_threshold_color,
-    _walk_one_transcript,
     format_cache,
     format_cost,
     format_cost_with_subagents,
     format_ttl,
-    walk_transcript,
+)
+from .diffstat import (
+    format_lines,
 )
 from .pace import (
     _PACE_CACHE_TTL_SECONDS,
@@ -207,6 +217,7 @@ __all__ = [
     "format_cost",
     "format_cost_with_subagents",
     "format_day_budget",
+    "format_lines",
     "format_model_badge",
     "format_quota",
     "format_qwen_api_stats",
@@ -214,11 +225,13 @@ __all__ = [
     "format_qwen_files",
     "format_qwen_thinking",
     "format_qwen_tokens",
+    "format_session_timing",
     "format_ttl",
     "full_flags",
     "ramp_color",
     "ramp_color_for",
     "resolve_flags",
+    "terminal_columns",
     "visible_width",
     "walk_transcript",
     "weekly_needle",

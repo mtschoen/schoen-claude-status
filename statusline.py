@@ -1,7 +1,8 @@
 """Main statusline entry point. Reads Claude Code's JSON payload from stdin
-and prints two lines:
-  line 1: [host] cwd (branch)
-  line 2: ctx | cache | quota | cost  (fields omitted when their data is absent)
+and prints up to three lines:
+  line 1: [host] cwd (branch) <session title, if it fits>
+  line 2: ctx | cache | ttl | quota | cost | +/-lines  (fields omitted when their data is absent)
+  line 3: session wall/api timing  ·  live turn beacon + calibrated ETA
 
 See README.md for layout, color thresholds, and install instructions.
 """
@@ -35,10 +36,14 @@ from statusline_lib import (
     format_context,
     format_cost_with_subagents,
     format_day_budget,
+    format_lines,
     format_model_badge,
     format_quota,
+    format_session_timing,
     format_ttl,
     resolve_flags,
+    terminal_columns,
+    visible_width,
     walk_transcript,
 )
 from statusline_lib.nudge import write_ctx_state
@@ -100,7 +105,31 @@ def _line1(d, cwd, spinner):
     branch = _git_branch(cwd)
     if branch:
         line1 = f"{line1} ({branch})"
-    return line1
+    return _append_session_name(line1, d.get("session_name"))
+
+
+# Muted grey so the session title reads as a secondary label, not a headline.
+_SESSION_NAME_COLOR = "\x1b[38;5;245m"
+_SESSION_NAME_MAX = 58
+
+
+def _append_session_name(line1, session_name):
+    """Append the auto-generated session title after the path/branch, but only
+    when it fits. Width comes from `$COLUMNS` (the same source line 2 uses); if
+    that is unset (older Claude Code) we append best-effort. The title is the
+    first thing to yield - it is a nicety, never worth pushing the path off
+    screen - so on a known-too-narrow terminal it is dropped entirely. Long
+    titles are clipped to keep line 1 bounded even when width is unknown."""
+    name = (session_name or "").strip()
+    if not name:
+        return line1
+    if len(name) > _SESSION_NAME_MAX:
+        name = name[: _SESSION_NAME_MAX - 1] + "…"
+    segment = f"  {_SESSION_NAME_COLOR}{name}{RESET}"
+    cols = terminal_columns()
+    if cols is not None and visible_width(line1) + visible_width(segment) > cols:
+        return line1
+    return f"{line1}{segment}"
 
 
 def _beacon_line(session_id):
@@ -116,6 +145,22 @@ def _beacon_line(session_id):
     return beacon_summary
 
 
+def _hide_cost():
+    """STATUSLINE_HIDE_COST truthy -> suppress every dollar figure on line 2.
+
+    Accepts 1/true/on/yes (any case). Anything else, including unset, shows
+    money as before. A deliberate calm switch: quota %/time-to-limit (the
+    non-dollar runway signal) stays, so you keep the useful budgeting info
+    without a session-cost figure attached to a run you might have to discard.
+    """
+    return os.environ.get("STATUSLINE_HIDE_COST", "").strip().lower() in (
+        "1",
+        "true",
+        "on",
+        "yes",
+    )
+
+
 class _Line2(NamedTuple):
     """Pre-computed inputs to line 2's compact re-render. Context is carried raw
     (not pre-rendered) so the compact resolver can drop its denominator and
@@ -129,6 +174,14 @@ class _Line2(NamedTuple):
     rate_limits: dict | None
     day_budget_summary: str
     cost_summary: str
+    # STATUSLINE_HIDE_COST: when True, every dollar-denominated figure is
+    # suppressed (session cost, $/min burn + target, day budget, the cache $
+    # parens, the TTL wasted-$ estimate). Token counts, hit%, the TTL eviction
+    # COUNT, context, and quota %/time-to-limit all stay - none of those carry a $.
+    hide_cost: bool
+    # Pre-rendered `+A/-B` session diffstat. Not money, so it is NOT gated by
+    # hide_cost - only by its own `lines` compact-drop flag.
+    lines_summary: str
 
 
 def _render_line2(flags, inputs):
@@ -137,6 +190,10 @@ def _render_line2(flags, inputs):
     flag-independent summaries plus the raw walk/rate_limits; only the cheap
     formatting re-runs per flag set."""
     walk = inputs.walk
+    # The money master switch ANDs into every dollar-bearing flag below, so it
+    # overrides regardless of width: hidden money never reappears just because
+    # the terminal is wide enough to show it.
+    money = not inputs.hide_cost
     context_summary = format_context(
         inputs.ctx_used,
         inputs.window_size,
@@ -150,16 +207,23 @@ def _render_line2(flags, inputs):
         walk["input"],
         walk["read_cost"],
         walk["write_cost"],
-        show_costs=flags["cache_costs"],
+        show_costs=flags["cache_costs"] and money,
         show_hit=flags["cache_hit"],
+        output_t=walk["output"],
+        input_cost=walk["input_cost"],
+        output_cost=walk["output_cost"],
+        show_input=flags["cache_input"] and money,
+        show_output=flags["cache_output"] and money,
     )
     ttl_summary = format_ttl(
-        walk["ttl_evictions"], walk["ttl_wasted"], show_wasted=flags["ttl_wasted"]
+        walk["ttl_evictions"],
+        walk["ttl_wasted"],
+        show_wasted=flags["ttl_wasted"] and money,
     )
     quota_summary = format_quota(inputs.rate_limits, show_pace=flags["quota_pace"])
     burnrate_summary = (
         format_burn_rate(inputs.rate_limits, show_target=flags["burn_target"])
-        if flags["burn_rate"]
+        if flags["burn_rate"] and money
         else ""
     )
     parts = [
@@ -170,9 +234,10 @@ def _render_line2(flags, inputs):
             cache_summary,
             ttl_summary,
             quota_summary,
-            inputs.day_budget_summary,
+            inputs.day_budget_summary if money else "",
             burnrate_summary,
-            inputs.cost_summary,
+            inputs.cost_summary if money else "",
+            inputs.lines_summary if flags["lines"] else "",
         )
         if s
     ]
@@ -214,9 +279,15 @@ def main():
     # Payload total_cost_usd is parent-only (Claude Code issue #48040: subagents
     # are isolated sessions). Pair it with our subagent estimate; walk["parent_cost"]
     # lets us flag drift.
-    auth_parent = (d.get("cost") or {}).get("total_cost_usd") or 0
+    cost = d.get("cost") or {}
+    auth_parent = cost.get("total_cost_usd") or 0
     cost_summary = format_cost_with_subagents(
         auth_parent, walk["parent_cost"], walk["subagent_cost"]
+    )
+    # Session diffstat (+A/-B) straight from the payload; not money, so it shows
+    # even under STATUSLINE_HIDE_COST.
+    lines_summary = format_lines(
+        cost.get("total_lines_added"), cost.get("total_lines_removed")
     )
 
     # Daily budget is flag-independent; compute once outside the compact loop.
@@ -237,6 +308,8 @@ def main():
         rate_limits,
         day_budget_summary,
         cost_summary,
+        _hide_cost(),
+        lines_summary,
     )
     flags = resolve_flags(lambda f: _render_line2(f, line2_inputs))
     line2 = _render_line2(flags, line2_inputs)
@@ -245,7 +318,17 @@ def main():
     if line2:
         sys.stdout.write("\n" + line2)
 
-    line3 = _beacon_line(d.get("session_id") or "")
+    # Line 3: session wall/api timing (always available) ahead of the live turn
+    # beacon + calibrated ETA (only while a turn is in flight). Either may be
+    # absent; join with the same separator the beacon uses internally.
+    line3 = "  ·  ".join(
+        part
+        for part in (
+            format_session_timing(cost),
+            _beacon_line(d.get("session_id") or ""),
+        )
+        if part
+    )
     if line3:
         sys.stdout.write("\n" + line3)
 

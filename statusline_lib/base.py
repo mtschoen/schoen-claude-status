@@ -28,6 +28,11 @@ RESET = "\x1b[0m"
 CACHE_READ = "\x1b[38;5;38m"  # teal
 CACHE_WRITE = ORANGE  # cache-write identity reuses the orange hue
 CTX_DENOM = "\x1b[38;5;139m"  # soft mauve
+# Full-breakdown identity hues for the two non-cache cost components, kept
+# distinct from the teal/orange cache pair and the mauve denom so all four
+# figures read apart at a glance.
+INPUT_TOK = "\x1b[38;5;67m"  # steel blue -- fresh (full-price) input tokens
+OUTPUT_TOK = "\x1b[38;5;141m"  # light violet -- generated output tokens
 
 
 def fmt(n):

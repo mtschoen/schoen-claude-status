@@ -10,10 +10,11 @@ thresholds.
 ![statusline example](docs/example.svg)
 
 ```
-[hostname] /path/to/cwd (branch)
-opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $1.02/min↓ | $10.66
+[hostname] /path/to/cwd (branch)  Investigating the flaky test
+opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | 5h: 6% +0.4h wk: 21% +9.7h | $1.02/min↓ | $10.66 | +543/-113
+⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
 # API-key session (no rate_limits), STATUSLINE_DAILY_BUDGET=100:
-opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1.02/min↓ | $10.66
+opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1.02/min↓ | $10.66 | +543/-113
 ● opus4.8 reviewing diff      | 215.4K / 1.00M (21.5%) | 4.21M / 89.3K / 97% hit | $4.82 | 1m23s
 ✓ sonnet4.6 exploring config  | 18.4K  / 200K  ( 9.2%) | 87.3K / 4.2K  / 95% hit | $0.21
 ● haiku4.5 running tests       | 5.1K   / 200K  ( 2.6%) | 18.9K / 1.1K  / 84% hit | $0.04 | 8s
@@ -27,7 +28,11 @@ sessions are running in this cwd, and current git branch (if any).
 Detection enumerates `claude` processes whose cwd matches, excluding
 `-p` headless subagents, so the warning clears the moment the other
 session exits. Requires `psutil`; without it the badge stays off
-entirely (see [Requirements](#requirements)).
+entirely (see [Requirements](#requirements)). When Claude Code supplies a
+`session_name` (its auto-generated title for the session) and there's room
+for it within `$COLUMNS`, it's appended in muted grey after the branch -
+dropped first if the terminal is too narrow, so it never pushes the path off
+screen.
 
 **Line 2** - pipe-separated metrics with no inline labels (colors carry the
 identity); fields are omitted when their data isn't available:
@@ -120,16 +125,30 @@ identity); fields are omitted when their data isn't available:
   and tinted by drift direction/severity otherwise. `= $total` is their sum,
   carrying its own higher color bands (see table) so a combined burn that
   neither figure shows on its own still flags.
+- **Lines** - a `+A/-B` session diffstat (green added, red removed) straight
+  from the payload's `cost.total_lines_added` / `total_lines_removed`, e.g.
+  `+543/-113`. Counts use the same thousands-compaction as the token figures
+  (`+1.2K/-340`). It's a productivity signal, not money, so unlike the cost
+  fields it **survives `STATUSLINE_HIDE_COST`**; it's gated only by width
+  (drops fairly early in compact mode). Omitted until something has changed.
 
-**Line 3 (beacon)** - appears only when the agent has emitted a live
-[progress-beacon](https://github.com/mtschoen/skills-progress-beacon) for
-the current turn. Example:
+**Line 3** - session timing, then the live turn beacon. Either part may be
+absent: the timing shows whenever the payload carries durations (almost
+always), the beacon only while a turn is in flight, so line 3 appears more
+often than before. Example:
 
 ```
-⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
+⏳ 1h02m · 27m api  ·  ⏱ turn 14:32 (8m) · step 14:38 (2m) · ~5m · resolving merge conflict  ·  ~17m calibrated (3.5×)
 ```
 
-Field-by-field:
+- **Session timing** (`⏳ 1h02m · 27m api`) - wall-clock time the session has
+  existed (`cost.total_duration_ms`) and time spent in model calls
+  (`cost.total_api_duration_ms`), so the pair shows how compute-bound the
+  session has been. Muted grey - ambient context, not a warning. The `⏳`
+  hourglass is deliberately distinct from the beacon's `⏱` turn timer.
+
+The remainder of the line is the **progress-beacon** (only when one is active),
+field-by-field:
 
 - `⏱` - icon marker; a live beacon exists for the current turn.
 - `turn HH:MM (Nm)` - wall-clock time the `begin` beacon was emitted (the
@@ -320,11 +339,41 @@ both the coloring and the arrow.
 | `1` | forces maximum compaction (all embellishments off) |
 
 In `auto` mode, embellishments are dropped in this order until the line fits:
-cache `$` parens, then the target-rate arrow, then cache hit%, then the quota
-pace numbers, then the TTL wasted-$ estimate. The narrowest windows then enter a
-super-minimal tier that drops the whole live `$/min` field, then the context
-percentage, and finally the context window-size denominator. The TTL count,
-session cost, context used-token count, and model badge are never dropped.
+the full-breakdown **output** figure, then the **input** figure (the two
+widest-only cost components), then the cache `$` parens, then the target-rate
+arrow, then cache hit%, then the quota pace numbers, then the TTL wasted-$
+estimate. The narrowest windows then enter a super-minimal tier that drops the
+whole live `$/min` field, then the context percentage, and finally the context
+window-size denominator. The cache read/write token counts, TTL count, session
+cost, context used-token count, and model badge are never dropped - so the cache
+field's essential core (read / write / hit%) is the last of it to go.
+
+The widest layout therefore shows all four cost components -
+`input (cost) / read (cost) / write (cost) / output (cost) / hit%` - which sum
+to the session's token cost (the `input` and `output` figures are the two the
+cache pair alone omits: fresh uncached input and generated output). They are the
+first to shed, so narrower terminals fall back to the familiar
+`read / write / hit%`.
+
+### Hiding cost (`STATUSLINE_HIDE_COST`)
+
+Set `STATUSLINE_HIDE_COST` to `1` (or `true`/`on`/`yes`) to suppress **every
+dollar-denominated figure** on line 2: the session cost, the `$/min` burn rate
+and its target arrow, the API-key `day:` budget, the cache `$` parens, and the
+TTL wasted-$ estimate. Everything non-dollar stays - the cache read/write token
+counts and hit%, the TTL eviction **count**, the context field, and the quota
+`5h:`/`wk:` percentages with their `+Hh` time-to-limit projections:
+
+```
+opus4.8] | 165.3K / 1.00M (16.5%) | 6.79M / 250.6K / 96% hit | 5h: 22% +9.9h wk: 30% +143.5h
+```
+
+The quota line is the point: it keeps the useful "how much runway is left"
+signal as a percentage and a projected number of hours, without ever attaching a
+dollar amount to a session you might have to discard and restart. Unset (the
+default) shows money as before. It composes with `STATUSLINE_COMPACT` - the
+money switch is an override, so hidden figures never reappear just because the
+terminal is wide.
 
 ## Why this and not [other-statusline]?
 

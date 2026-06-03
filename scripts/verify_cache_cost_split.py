@@ -74,6 +74,28 @@ def _check_components_and_evictions(failures):
     if not _approx(walk["ttl_wasted"], exp_wasted):
         failures.append(f"ttl_wasted {walk['ttl_wasted']!r} != {exp_wasted!r}")
 
+    # The other two breakdown components: fresh input at the plain input rate
+    # (5.0/Mtok opus), output at the output rate (25.0/Mtok). Four turns at the
+    # _turn defaults (inp=10, out=100) -> 40 input tok, 400 output tok.
+    exp_input_cost = 40 * 5.0 / 1e6
+    exp_output_cost = 400 * 25.0 / 1e6
+    if not _approx(walk["input_cost"], exp_input_cost):
+        failures.append(f"input_cost {walk['input_cost']!r} != {exp_input_cost!r}")
+    if not _approx(walk["output_cost"], exp_output_cost):
+        failures.append(f"output_cost {walk['output_cost']!r} != {exp_output_cost!r}")
+    # The four components must reconcile to the walk's own token cost (cost has no
+    # web-search add-on in this fixture, so the sum is exact).
+    exp_components = (
+        walk["read_cost"]
+        + walk["write_cost"]
+        + walk["input_cost"]
+        + walk["output_cost"]
+    )
+    if not _approx(walk["cost"], exp_components):
+        failures.append(
+            f"four components {exp_components!r} must sum to cost {walk['cost']!r}"
+        )
+
 
 def _check_subagent_evictions_excluded(failures):
     # A subagent's first turn is a full write by construction; it must NOT count
@@ -171,7 +193,7 @@ def _check_missing_timestamps_not_evicted(failures):
 
 
 def _check_format_cache_render(failures):
-    from statusline_lib.cost import format_cache
+    from statusline_lib.costfmt import format_cache
 
     full = format_cache(11_980_000, 428_100, 10, 1.20, 2.14)
     if "($1.20)" not in full or "($2.14)" not in full:
@@ -191,6 +213,41 @@ def _check_format_cache_render(failures):
     legacy = format_cache(11_980_000, 428_100, 10)
     if "$" in legacy or "hit" not in legacy:
         failures.append(f"legacy 3-arg call should match old output; got {legacy!r}")
+
+    # Full four-way breakdown: input figure precedes read, output follows write,
+    # all four $ figures present, essentials (read/write/hit%) still there.
+    breakdown = format_cache(
+        11_980_000,
+        428_100,
+        50_000,
+        1.20,
+        2.14,
+        output_t=2_000,
+        input_cost=0.25,
+        output_cost=0.05,
+        show_input=True,
+        show_output=True,
+    )
+    for needle in ("($0.25)", "($1.20)", "($2.14)", "($0.05)", "hit"):
+        if needle not in breakdown:
+            failures.append(f"breakdown missing {needle!r}; got {breakdown!r}")
+    if breakdown.index("($0.25)") >= breakdown.index("($1.20)"):
+        failures.append(f"input figure must precede read; got {breakdown!r}")
+    if breakdown.index("($0.05)") <= breakdown.index("($2.14)"):
+        failures.append(f"output figure must follow write; got {breakdown!r}")
+
+    # The full-breakdown figures default off, so today's callers are unaffected;
+    # and each is gated on its own cost arg even when its show flag is on.
+    default_off = format_cache(11_980_000, 428_100, 50_000, 1.20, 2.14)
+    if "($0.25)" in default_off or "($0.05)" in default_off:
+        failures.append(f"input/output must be off by default; got {default_off!r}")
+    no_cost_arg = format_cache(
+        11_980_000, 428_100, 50_000, 1.20, 2.14, show_input=True, show_output=True
+    )
+    if no_cost_arg != default_off:
+        failures.append(
+            f"show flags without cost args must render nothing extra; got {no_cost_arg!r}"
+        )
 
 
 def check(failures):
