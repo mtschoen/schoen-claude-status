@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statusline_lib.base import RED
-from statusline_lib.cost import TTL_WARN_GLYPH, format_ttl
+from statusline_lib.costfmt import TTL_WARN_GLYPH, format_ttl
 
 
 def _check_hidden_at_zero(failures):

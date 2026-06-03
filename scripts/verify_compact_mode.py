@@ -63,12 +63,15 @@ def _check_auto_unset_columns(failures):
 
 
 def _check_auto_drops_in_order(failures):
-    # Full width 50 + 8*10 = 130; COLUMNS=75 sheds the first six (down to 70).
+    # Full width 50 + 11*10 = 160; COLUMNS=75 sheds the first nine (down to 70).
     flags = _with_env(
         {"STATUSLINE_COMPACT": "auto", "COLUMNS": "75"},
         lambda: resolve_flags(_stub_render),
     )
     expected = {
+        "cache_output": False,
+        "cache_input": False,
+        "lines": False,
         "cache_costs": False,
         "burn_target": False,
         "cache_hit": False,
