@@ -38,9 +38,10 @@ opus4.8[1m] | 183.7K / 1.00M (18.0%) | 15.41M / 207.4K / 99% hit | day: 47% | $1
 **Line 1** - a render-tick spinner, hostname (muted mauve), the session's
 launch directory (`workspace.project_dir`) as a stable anchor - and, when the
 session has `cd`'d elsewhere, the current directory appended after it in
-desaturated teal (so the home stays the visual anchor while the move reads as
-secondary): a path relative to home when the move stayed nested inside it, or
-the absolute path when it broke out above home or onto another drive, an
+desaturated-teal `[brackets]` (so the home stays the visual anchor while the
+move reads as secondary): a `./`-prefixed path relative to home when the move
+stayed nested inside it, or the absolute path when it broke out above home or
+onto another drive, an
 optional red `[N sessions]` warning when two or more interactive
 Claude Code sessions are running in this cwd, the git ref as `branch:hash`
 (the short commit hash tinted tan so it reads apart from the branch), a short

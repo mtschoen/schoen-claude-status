@@ -133,8 +133,13 @@ def _format_cwd(home, current):
         relative = None
     # A leading ".." means the session has stepped out above home; a relative
     # path there is more confusing than helpful, so show the absolute dir.
-    hop = current if relative is None or relative.startswith("..") else relative
-    return f"{home} {_CWD_REL_COLOR}{hop}{RESET}"
+    # Nested moves get a leading "./" (os.sep keeps it native: ".\" on Windows,
+    # "./" on POSIX) so the hop reads unambiguously as relative-to-home.
+    if relative is None or relative.startswith(".."):
+        hop = current
+    else:
+        hop = f".{os.sep}{relative}"
+    return f"{home} {_CWD_REL_COLOR}[{hop}]{RESET}"
 
 
 def _line1(d, cwd, cwd_display, spinner):
