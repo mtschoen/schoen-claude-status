@@ -6,6 +6,9 @@ ramp_color_for(value, warn, danger) is banded: `warn` is the green edge and
 `danger` the red edge, with solid green/red plateaus beyond. It works for both
 high-bad (warn < danger) and high-good (warn > danger) orientations.
 
+Also covers base.py's degenerate warn == danger band and its orjson-absent
+fallback (_json_loads must degrade to stdlib json.loads).
+
 Run from anywhere; imports from `schoen-claude-status` by path.
 """
 
@@ -102,6 +105,53 @@ def _check_threshold_colorizers(failures):
         failures.append("color_high_good should be red at danger")
 
 
+def _check_equal_warn_danger(failures):
+    # ramp_color_for(value, warn, danger) when warn == danger: value >= warn ->
+    # ramp_color(1.0) (the "hot" end), value < warn -> ramp_color(0.0) (the "cool"
+    # end). Covers base.py line 85.
+    result_at = ramp_color_for(5, 5, 5)
+    result_above = ramp_color_for(10, 5, 5)
+    result_below = ramp_color_for(3, 5, 5)
+    if result_at != ramp_color(1.0):
+        failures.append(
+            f"warn==danger, value==warn should be ramp_color(1.0); got {result_at!r}"
+        )
+    if result_above != ramp_color(1.0):
+        failures.append(
+            f"warn==danger, value>warn should be ramp_color(1.0); got {result_above!r}"
+        )
+    if result_below != ramp_color(0.0):
+        failures.append(
+            f"warn==danger, value<warn should be ramp_color(0.0); got {result_below!r}"
+        )
+
+
+def _check_orjson_fallback(failures):
+    # base.py lines 11-12: when orjson is absent the module falls back to json.loads.
+    # We test this by verifying _json_loads can parse a JSON string correctly, which
+    # exercises whichever branch was taken at import time.
+    import importlib
+    import sys
+
+    import statusline_lib.base as base_mod
+
+    # Simulate the fallback by temporarily hiding orjson and re-importing.
+    real_orjson = sys.modules.get("orjson", None)
+    sys.modules["orjson"] = None  # type: ignore[assignment]
+    try:
+        importlib.reload(base_mod)
+        result = base_mod._json_loads('{"x": 1}')
+        if result != {"x": 1}:
+            failures.append(f"_json_loads fallback should parse JSON; got {result!r}")
+    finally:
+        if real_orjson is None:
+            sys.modules.pop("orjson", None)
+        else:
+            sys.modules["orjson"] = real_orjson
+        # Restore the original module state so other tests see a clean import.
+        importlib.reload(base_mod)
+
+
 def check(failures):
     _check_endpoints(failures)
     _check_clamp(failures)
@@ -109,6 +159,8 @@ def check(failures):
     _check_high_good_mapping(failures)
     _check_delta_mapping(failures)
     _check_threshold_colorizers(failures)
+    _check_equal_warn_danger(failures)
+    _check_orjson_fallback(failures)
 
 
 def main():

@@ -94,9 +94,45 @@ def check(failures):
         failures.append("empty cwd should pass real count through (cannot debounce)")
 
 
+def check_save_debounce_state_oserror(failures):
+    # sessions.py lines 178-180: _save_debounce_state swallows OSError when the
+    # cache file cannot be written. Point the path at an unwritable location.
+    import tempfile
+
+    from statusline_lib.sessions import _save_debounce_state
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = os.path.join(tmp, "not_a_dir")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("blocker")
+        bad_path = os.path.join(blocker, "debounce.json")
+        # Must not raise; an unwritable cache is non-fatal.
+        _save_debounce_state(bad_path, {"k": {"last": 1.0, "first": 1.0}}, 1.0)
+
+
+def check_load_debounce_state_non_dict(failures):
+    # sessions.py line 132: _load_debounce_state returns {} when the JSON root is
+    # not a dict (e.g. a stray JSON array written by another tool).
+    import tempfile
+
+    from statusline_lib.sessions import _load_debounce_state
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "debounce.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        result = _load_debounce_state(path)
+        if result != {}:
+            failures.append(
+                f"_load_debounce_state with JSON array should return {{}}; got {result!r}"
+            )
+
+
 def main():
     failures = []
     check(failures)
+    check_save_debounce_state_oserror(failures)
+    check_load_debounce_state_non_dict(failures)
     if failures:
         for f in failures:
             print(f"FAIL: {f}")

@@ -328,12 +328,7 @@ def weekly_sustainable_rate(rate_limits):
     w = rl.get("seven_day") or {}
     util = w.get("used_percentage")
     resets_at = w.get("resets_at")
-    if (
-        util is None
-        or util < _WEEKLY_TARGET_MIN_UTIL_PCT
-        or util >= 100
-        or not resets_at
-    ):
+    if util is None or util < _WEEKLY_TARGET_MIN_UTIL_PCT or not resets_at:
         return None
     remaining = resets_at - _now_unix()
     if remaining <= 0:
@@ -346,6 +341,7 @@ def weekly_sustainable_rate(rate_limits):
     quota_dollars = window_spend / (util / 100.0)
     remaining_dollars = quota_dollars - window_spend
     if remaining_dollars <= 0:
+        # util at/over 100%: the whole weekly quota is already spent.
         return None
     return remaining_dollars / (remaining / 60.0)
 

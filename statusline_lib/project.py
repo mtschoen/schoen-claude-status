@@ -63,9 +63,8 @@ def _recent_slope_rate(hourly_burn, params):
     xs = list(range(count))
     mean_x = sum(xs) / count
     mean_y = sum(recent) / count
+    # xs are distinct integers and count >= 2 here, so denom is always > 0.
     denom = sum((x - mean_x) ** 2 for x in xs)
-    if denom == 0:
-        return mean_y
     slope = sum((xs[i] - mean_x) * (recent[i] - mean_y) for i in range(count)) / denom
     return max(0.0, mean_y + slope * (xs[-1] - mean_x + 1))
 

@@ -125,6 +125,51 @@ def check_hook_subprocess(failures):
             failures.append("below-threshold session should emit nothing")
 
 
+def check_format_nudge(failures):
+    # nudge.py lines 37-39: format_nudge builds the additionalContext string.
+    from statusline_lib.nudge import NUDGE_SOFT_CEILING_TOKENS, format_nudge
+
+    out = format_nudge(260_000)
+    if "260K" not in out:
+        failures.append(f"format_nudge should mention 260K tokens; got {out!r}")
+    ceiling_k = NUDGE_SOFT_CEILING_TOKENS // 1000
+    if f"~{ceiling_k}K" not in out:
+        failures.append(
+            f"format_nudge should mention the soft ceiling ~{ceiling_k}K; got {out!r}"
+        )
+    if "/wrap" not in out:
+        failures.append(f"format_nudge should mention /wrap; got {out!r}")
+
+
+def check_write_ctx_state_oserror(failures):
+    # nudge.py lines 88-91: write_ctx_state swallows OSError from an unwritable path.
+    # Point state_dir at a path inside a nonexistent parent so makedirs itself raises.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # A file in tmp that we treat as a directory in the state_dir argument --
+        # putting a file where makedirs expects to create a directory triggers OSError.
+        blocker = os.path.join(tmp, "not_a_dir")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("blocker")
+        bad_state_dir = os.path.join(blocker, "subdir")
+        # Must not raise; nudge degrades silently.
+        write_ctx_state(SID, 260_000, 1_000_000, now=1.0, state_dir=bad_state_dir)
+
+
+def check_write_marker_oserror(failures):
+    # nudge.py lines 128-131: write_marker swallows OSError from an unwritable path.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = os.path.join(tmp, "not_a_dir")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("blocker")
+        bad_state_dir = os.path.join(blocker, "subdir")
+        # Must not raise; worst case is a repeat nudge on the next prompt.
+        write_marker(SID, state_dir=bad_state_dir)
+
+
 def main():
     failures = []
     for check in (
@@ -134,6 +179,9 @@ def main():
         check_corrupt,
         check_concurrent_keying,
         check_hook_subprocess,
+        check_format_nudge,
+        check_write_ctx_state_oserror,
+        check_write_marker_oserror,
     ):
         check(failures)
     if failures:

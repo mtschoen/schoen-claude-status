@@ -230,6 +230,70 @@ def _check_glyph_text_presentation(failures):
         failures.append("on-target glyph should carry the U+FE0E text selector")
 
 
+def _check_spend_from_path_oserror(failures):
+    # burnrate.py lines 72-74: _spend_from_path swallows OSError on unreadable file.
+    # Pass a path that cannot be opened; the function should return 0.0 without raising.
+    result = burnrate._spend_from_path(
+        "/nonexistent/path/that/cannot/be/opened.jsonl", set(), 0
+    )
+    if result != 0.0:
+        failures.append(
+            f"_spend_from_path on unreadable path should return 0.0; got {result!r}"
+        )
+
+
+def _check_sum_window_spend_no_roots(failures):
+    # burnrate.py line 88: _sum_window_spend returns 0.0 early when walker returns [].
+    real_walker = burnrate._walker_root_list
+    burnrate._walker_root_list = list
+    try:
+        result = burnrate._sum_window_spend(0)
+    finally:
+        burnrate._walker_root_list = real_walker
+    if result != 0.0:
+        failures.append(
+            f"_sum_window_spend with no roots should return 0.0; got {result!r}"
+        )
+
+
+def _check_window_spend_cache_write_oserror(failures):
+    # burnrate.py lines 121-123: cache write OSError is swallowed; the computed total
+    # is still returned. Point the cache path at an unwritable location.
+    import tempfile
+
+    real_path = burnrate._SPEND_CACHE_PATH
+    real_sum = burnrate._sum_window_spend
+    burnrate._sum_window_spend = lambda ws: 7.5
+    # Use a path inside a nonexistent directory so the open() raises OSError.
+    with tempfile.TemporaryDirectory() as tmp:
+        bad_path = os.path.join(tmp, "no_such_dir", "cache.json")
+        burnrate._SPEND_CACHE_PATH = bad_path
+        try:
+            result = burnrate._window_spend_cached(_NOW - 300)
+        finally:
+            burnrate._sum_window_spend = real_sum
+            burnrate._SPEND_CACHE_PATH = real_path
+    if result != 7.5:
+        failures.append(
+            f"_window_spend_cached should return total even when cache write fails; got {result!r}"
+        )
+
+
+def _check_day_field_no_budget(failures):
+    # burnrate.py line 278: format_day_budget returns "" when no budget is configured.
+    real = os.environ.get("STATUSLINE_DAILY_BUDGET")
+    os.environ.pop("STATUSLINE_DAILY_BUDGET", None)
+    try:
+        out = burnrate.format_day_budget(None)
+    finally:
+        if real is not None:
+            os.environ["STATUSLINE_DAILY_BUDGET"] = real
+    if out != "":
+        failures.append(
+            f"format_day_budget with no budget should return ''; got {out!r}"
+        )
+
+
 def check(failures):
     _check_cache_dedupes_walk(failures)
     _check_five_min_rate_render(failures)
@@ -243,6 +307,10 @@ def check(failures):
     _check_rate_number_color(failures)
     _check_rate_number_colored_in_field(failures)
     _check_glyph_text_presentation(failures)
+    _check_spend_from_path_oserror(failures)
+    _check_sum_window_spend_no_roots(failures)
+    _check_window_spend_cache_write_oserror(failures)
+    _check_day_field_no_budget(failures)
 
 
 def main():

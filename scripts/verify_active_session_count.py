@@ -110,11 +110,164 @@ def check_cache(failures):
             )
 
 
+def check_psutil_unavailable(failures):
+    # sessions.py lines 27-28 and 89: when psutil cannot be imported,
+    # _resolve_psutil returns None and count_active_sessions returns 0.
+    import sys
+
+    import statusline_lib.sessions as sessions_mod
+
+    real_psutil = sys.modules.get("psutil")
+    real_cached = sessions_mod._psutil
+    # Simulate psutil being absent by hiding it from sys.modules and clearing the cache.
+    sys.modules["psutil"] = None  # type: ignore[assignment]
+    sessions_mod._psutil = None
+    try:
+        result = sessions_mod._resolve_psutil()
+        if result is not None:
+            failures.append(
+                f"_resolve_psutil with psutil absent should return None; got {result!r}"
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "cache.json")
+            count = count_active_sessions(
+                os.path.join(tmp, "proj"), cache_path=cache_path
+            )
+            if count != 0:
+                failures.append(
+                    f"count_active_sessions without psutil should return 0; got {count}"
+                )
+    finally:
+        if real_psutil is None:
+            sys.modules.pop("psutil", None)
+        else:
+            sys.modules["psutil"] = real_psutil
+        sessions_mod._psutil = real_cached
+
+
+def check_save_session_count_cache_oserror(failures):
+    # sessions.py lines 59-62: _save_session_count_cache swallows OSError.
+    import statusline_lib.sessions as sessions_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = os.path.join(tmp, "not_a_dir")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("blocker")
+        bad_path = os.path.join(blocker, "cache.json")
+        # Must not raise.
+        sessions_mod._save_session_count_cache(
+            bad_path, {"k": {"count": 1, "ts": 1.0}}, 1.0
+        )
+
+
+def check_count_via_psutil_exception(failures):
+    # sessions.py lines 92-93: if _count_via_psutil raises any Exception,
+    # count_active_sessions catches it and returns 0.
+    import statusline_lib.sessions as sessions_mod
+
+    real_count = sessions_mod._count_via_psutil
+    sessions_mod._count_via_psutil = lambda cwd, ps: (_ for _ in ()).throw(
+        RuntimeError("simulated psutil failure")
+    )
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = os.path.join(tmp, "cache.json")
+            result = count_active_sessions(
+                os.path.join(tmp, "proj"), cache_path=cache_path
+            )
+            if result != 0:
+                failures.append(
+                    f"count_active_sessions when _count_via_psutil raises should return 0; got {result}"
+                )
+    finally:
+        sessions_mod._count_via_psutil = real_count
+
+
+def check_count_via_psutil_access_denied(failures):
+    # sessions.py lines 129-130: NoSuchProcess and AccessDenied from p.cmdline()/p.cwd()
+    # are caught and the process is skipped (count stays 0 if no other process matches).
+    # Also covers line 132 (count += 1) by including a process that does match.
+    import statusline_lib.sessions as sessions_mod
+
+    target_cwd = os.path.normcase("/home/user/proj")
+
+    class FakeAccessDenied(Exception):
+        pass
+
+    class FakeNoSuchProcess(Exception):
+        def __init__(self, pid=0):
+            super().__init__(pid)
+
+    class FakeDeniedProc:
+        """Simulates a process that raises AccessDenied on cmdline()."""
+
+        def __init__(self):
+            self.info = {"name": "claude"}
+
+        def cmdline(self):
+            raise FakeAccessDenied("no access")
+
+        def cwd(self):
+            raise FakeAccessDenied("no access")
+
+    class FakeMatchingProc:
+        """Simulates a real interactive Claude session in the target cwd."""
+
+        def __init__(self):
+            self.info = {"name": "claude"}
+
+        def cmdline(self):
+            return ["claude"]
+
+        def cwd(self):
+            return target_cwd
+
+    class FakePsutil:
+        NoSuchProcess = FakeNoSuchProcess
+        AccessDenied = FakeAccessDenied
+
+        @staticmethod
+        def process_iter(attrs):
+            yield FakeDeniedProc()
+            yield FakeMatchingProc()
+
+    real_psutil = sessions_mod._psutil
+    sessions_mod._psutil = FakePsutil  # type: ignore[assignment]
+    try:
+        count = sessions_mod._count_via_psutil(target_cwd, FakePsutil)
+        if count != 1:
+            failures.append(
+                f"_count_via_psutil should skip AccessDenied and count 1 matching process; got {count}"
+            )
+    finally:
+        sessions_mod._psutil = real_psutil
+
+
+def check_load_session_count_cache_non_dict(failures):
+    # sessions.py: _load_session_count_cache returns {} when JSON root is not a dict.
+    import statusline_lib.sessions as sessions_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "cache.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        result = sessions_mod._load_session_count_cache(path)
+        if result != {}:
+            failures.append(
+                f"_load_session_count_cache with JSON array should return {{}}; got {result!r}"
+            )
+
+
 def main():
     failures = []
     check_dispatch(failures)
     check_classifier(failures)
     check_cache(failures)
+    check_psutil_unavailable(failures)
+    check_save_session_count_cache_oserror(failures)
+    check_count_via_psutil_exception(failures)
+    check_count_via_psutil_access_denied(failures)
+    check_load_session_count_cache_non_dict(failures)
 
     if failures:
         for f in failures:

@@ -79,18 +79,20 @@ jobs:
       - name: Install optional runtime deps
         # psutil is import-guarded in statusline_lib, but installing it lets the
         # suite exercise the real process-enumeration path instead of the mtime
-        # fallback.
-        run: pip install psutil
-      - name: Run verification scripts
-        # Run every scripts/verify_*.py; collect failures so one bad script
-        # doesn't mask the others, then fail the job if any failed. (Don't rely
-        # on `set -e` aborting inside the loop -- track explicitly.)
+        # fallback. coverage powers the 100% line-coverage gate below.
+        run: pip install psutil coverage
+      - name: Run verification scripts (coverage-gated)
+        # Run every scripts/verify_*.py under coverage; collect failures so one
+        # bad script doesn't mask the others. statusline_lib is held at 100%
+        # line coverage (reached 2026-06-10; see TEST-REPORT.md) -- the report
+        # step fails the job on any uncovered line, same as a test failure.
         run: |
           fail=0
           for t in scripts/verify_*.py; do
             echo "=== $t ==="
-            python "$t" || fail=1
+            python -m coverage run -a "$t" || fail=1
           done
+          python -m coverage report -m --include="statusline_lib/*" --fail-under=100 || fail=1
           exit $fail
 
   test-windows:
@@ -130,8 +132,9 @@ jobs:
       - name: Install optional runtime deps
         # psutil exercises the real process-enumeration path in the active-session
         # check instead of the mtime fallback (matches the Linux test job).
+        # coverage powers the 100% line-coverage gate below.
         shell: pwsh
-        run: pip install psutil
+        run: pip install psutil coverage
 
       - name: Check syntax (py_compile)
         shell: pwsh
@@ -140,15 +143,19 @@ jobs:
           $files += 'statusline.py', 'subagent_statusline.py', 'install.py', 'wrap_nudge.py'
           python -m py_compile @files
 
-      - name: Run verification scripts
-        # The same scripts/verify_*.py suite the Linux job runs, on Windows. Collect
-        # failures so one bad script doesn't mask the others, then fail if any did.
+      - name: Run verification scripts (coverage-gated)
+        # The same scripts/verify_*.py suite the Linux job runs, on Windows,
+        # under the same 100% statusline_lib line-coverage gate (platform
+        # branches must be covered on BOTH OSes -- tests patch os.name to force
+        # the foreign arm).
         shell: pwsh
         run: |
           $fail = 0
           Get-ChildItem scripts/verify_*.py | ForEach-Object {
             Write-Host "=== $($_.Name) ==="
-            python $_.FullName
+            python -m coverage run -a $_.FullName
             if ($LASTEXITCODE -ne 0) { $fail = 1 }
           }
+          python -m coverage report -m --include="statusline_lib/*" --fail-under=100
+          if ($LASTEXITCODE -ne 0) { $fail = 1 }
           exit $fail

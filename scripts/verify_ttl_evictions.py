@@ -36,10 +36,27 @@ def _check_wasted_toggle(failures):
         failures.append(f"wasted $ must be omitted when show_wasted=False; got {out!r}")
 
 
+def _check_wasted_zero_suppressed(failures):
+    # costfmt.py line 63: the wasted-$ parenthetical is omitted when wasted <= 0
+    # even when show_wasted=True. Evictions > 0 but wasted = 0 is degenerate but
+    # reachable (no write tokens above the floor in that eviction), so it must not
+    # crash or show "(~$0.00)".
+    out = format_ttl(1, 0.0, show_wasted=True)
+    if "TTL:1" not in out:
+        failures.append(
+            f"eviction with zero wasted should still show count; got {out!r}"
+        )
+    if "$" in out:
+        failures.append(
+            f"eviction with zero wasted must not show a $ figure; got {out!r}"
+        )
+
+
 def check(failures):
     _check_hidden_at_zero(failures)
     _check_loud_red_with_glyph(failures)
     _check_wasted_toggle(failures)
+    _check_wasted_zero_suppressed(failures)
 
 
 def main():

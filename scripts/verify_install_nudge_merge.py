@@ -138,6 +138,32 @@ def _check_shared_group_preserved(failures):
         )
 
 
+def _check_command_both_platform_branches(failures):
+    # Both arms of _nudge_command's os.name branch, regardless of the host OS
+    # (CI runs this suite on Linux AND Windows; 100% coverage must hold on
+    # both). Simulate each platform by patching os.name, then restore it.
+    real_name = os.name
+    try:
+        os.name = "nt"
+        _target, nt_command = _nudge_command("/repo")
+        os.name = "posix"
+        _target, posix_command = _nudge_command("/repo")
+    finally:
+        os.name = real_name
+
+    if "py -3" not in nt_command or "; exit 0" not in nt_command:
+        failures.append(
+            f"nt nudge command should use 'py -3' and '; exit 0'; got {nt_command!r}"
+        )
+    if "python3" not in posix_command or "|| true" not in posix_command:
+        failures.append(
+            f"POSIX nudge command should use python3 and '|| true'; got {posix_command!r}"
+        )
+    for command in (nt_command, posix_command):
+        if _NUDGE_SENTINEL not in command:
+            failures.append(f"nudge command should carry the sentinel; got {command!r}")
+
+
 def check(failures):
     _check_command_carries_sentinel(failures)
     _check_fresh_insert(failures)
@@ -145,6 +171,7 @@ def check(failures):
     _check_pre_sentinel_migrated(failures)
     _check_stale_duplicate_removed(failures)
     _check_shared_group_preserved(failures)
+    _check_command_both_platform_branches(failures)
 
 
 def main():

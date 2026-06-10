@@ -21,6 +21,26 @@ support:
 To refresh the pinned binary after new commits land on the fork branch:
 `pnpm add -g --allow-build=aislop "github:mtschoen/aislop#feat/csharp-support"`
 
+## Coverage gate: 100% on statusline_lib
+
+The verify suite (`scripts/verify_*.py`) is held at **100% line coverage of
+`statusline_lib/`** (reached 2026-06-10). CI runs the suite under coverage on
+Linux AND Windows and fails below 100% - treat an uncovered line like a
+failing test. Platform branches must be covered on BOTH OSes: patch `os.name`
+in the test to force the foreign arm. Entry-point glue (statusline.py,
+subagent_statusline.py, qwen_statusline.py, install.py, wrap_nudge.py) is
+outside the measured scope - keep logic in `statusline_lib`, glue thin.
+
+Measure locally (bash):
+
+    python -m coverage erase
+    for t in scripts/verify_*.py; do python -m coverage run -a "$t"; done
+    python -m coverage report -m --include="statusline_lib/*" --fail-under=100
+
+Current numbers: `TEST-REPORT.md`. No pragmas or exclusions: dead code gets
+deleted, "unreachable" lines get restructured until the guard is live - the
+same restructure-first policy as the aislop gate.
+
 ## Debugging the compact-mode width gate
 
 `statusline_lib/compact.py` auto-sheds line-2 fields only when the rendered width

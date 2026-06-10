@@ -106,6 +106,50 @@ def _check_never_drops_protected(failures):
             failures.append(f"{protected} must never be droppable")
 
 
+def _check_columns_invalid_string(failures):
+    # compact.py lines 61-62: _columns() returns None when COLUMNS is non-numeric.
+    # Exercised via resolve_flags in auto mode: with an invalid COLUMNS value the
+    # width check cannot proceed, so all flags stay on (same as unset).
+    flags = _with_env(
+        {"STATUSLINE_COMPACT": "auto", "COLUMNS": "notanumber"},
+        lambda: resolve_flags(_stub_render),
+    )
+    if not all(flags.values()):
+        failures.append(
+            f"invalid COLUMNS string should behave as unset (all flags on); got {flags}"
+        )
+
+
+def _check_columns_zero_or_negative(failures):
+    # compact.py line 63: _columns() returns None when cols <= 0. Exercised the
+    # same way as the invalid-string path: all flags stay on.
+    for value in ("0", "-1", "-100"):
+        flags = _with_env(
+            {"STATUSLINE_COMPACT": "auto", "COLUMNS": value},
+            lambda: resolve_flags(_stub_render),
+        )
+        if not all(flags.values()):
+            failures.append(
+                f"COLUMNS={value!r} (non-positive) should behave as unset; got {flags}"
+            )
+
+
+def _check_terminal_columns(failures):
+    # compact.py line 72: terminal_columns() is the public accessor for _columns().
+    from statusline_lib.compact import terminal_columns
+
+    result_unset = _with_env({"COLUMNS": None}, terminal_columns)
+    if result_unset is not None:
+        failures.append(
+            f"terminal_columns() with no COLUMNS should return None; got {result_unset!r}"
+        )
+    result_set = _with_env({"COLUMNS": "200"}, terminal_columns)
+    if result_set != 200:
+        failures.append(
+            f"terminal_columns() with COLUMNS=200 should return 200; got {result_set!r}"
+        )
+
+
 def check(failures):
     _check_visible_width(failures)
     _check_force_modes(failures)
@@ -113,6 +157,9 @@ def check(failures):
     _check_auto_drops_in_order(failures)
     _check_auto_super_minimal(failures)
     _check_never_drops_protected(failures)
+    _check_columns_invalid_string(failures)
+    _check_columns_zero_or_negative(failures)
+    _check_terminal_columns(failures)
 
 
 def main():

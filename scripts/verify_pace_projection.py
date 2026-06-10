@@ -134,6 +134,66 @@ def _check_partial_params(failures):
         )
 
 
+def _check_trailing_hours_empty(failures):
+    # project.py line 35: _trailing_hours_rate returns 0.0 for an empty hourly list.
+    from statusline_lib.project import _trailing_hours_rate
+
+    result = _trailing_hours_rate([], _params())
+    if result != 0.0:
+        failures.append(f"_trailing_hours_rate([]) should return 0.0; got {result!r}")
+
+
+def _check_ewma_empty(failures):
+    # project.py line 44: _ewma_rate returns 0.0 for an empty hourly list.
+    from statusline_lib.project import _ewma_rate
+
+    result = _ewma_rate([], _params())
+    if result != 0.0:
+        failures.append(f"_ewma_rate([]) should return 0.0; got {result!r}")
+
+
+def _check_recent_slope_single_point(failures):
+    # project.py line 62: _recent_slope_rate falls back to the last value when
+    # the recent tail has fewer than 2 points.
+    from statusline_lib.project import _recent_slope_rate
+
+    # window_hours=24 but only 1 bucket provided -> count < 2 -> returns recent[-1].
+    result = _recent_slope_rate([7.5], _params(window_hours=24))
+    if result != 7.5:
+        failures.append(
+            f"_recent_slope_rate with 1 point should return that value; got {result!r}"
+        )
+
+
+def _check_recent_slope_constant(failures):
+    # A constant series has slope 0, so the projection equals the mean. (Note:
+    # the denom==0 guard on project.py line 68 is unreachable in practice -- xs
+    # is range(count) with count >= 2, which always has positive x-variance; the
+    # count < 2 case returns earlier. This check pins the flat-slope behavior.)
+    from statusline_lib.project import _recent_slope_rate
+
+    result = _recent_slope_rate([3.0, 3.0], _params(window_hours=2))
+    if abs(result - 3.0) > 1e-9:
+        failures.append(
+            f"_recent_slope_rate with constant series should return mean_y=3.0; got {result!r}"
+        )
+
+
+def _check_is_on_target_warmup_not_passed(failures):
+    # project.py line 104: is_on_target returns False when elapsed < warmup_seconds.
+    from statusline_lib.project import is_on_target
+
+    warmup = 18 * _HOUR
+    elapsed = warmup - 1  # just below the warmup boundary
+    result = is_on_target(
+        100.0, 100.0, elapsed, _params(warmup_seconds=warmup), margin_seconds=14400.0
+    )
+    if result is not False:
+        failures.append(
+            f"is_on_target below warmup should return False; got {result!r}"
+        )
+
+
 def check(failures):
     _check_estimators_pick_recent(failures)
     _check_flat_burn_is_on_pace(failures)
@@ -141,6 +201,11 @@ def check(failures):
     _check_degenerate_window(failures)
     _check_bad_util(failures)
     _check_partial_params(failures)
+    _check_trailing_hours_empty(failures)
+    _check_ewma_empty(failures)
+    _check_recent_slope_single_point(failures)
+    _check_recent_slope_constant(failures)
+    _check_is_on_target_warmup_not_passed(failures)
 
 
 def main():

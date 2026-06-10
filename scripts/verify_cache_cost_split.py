@@ -2,7 +2,10 @@
 parent + subagents) and parent-only TTL eviction count + wasted-$.
 
 Builds real temp JSONL transcripts and runs walk_transcript over them, so the
-init -> accumulate -> return path is exercised end to end.
+init -> accumulate -> return path is exercised end to end. Also covers the
+walk's resilience paths (bad-JSON lines, non-assistant entries, snapshot
+duplicates, unreadable files, malformed timestamps) and the format_cache
+empty-session guard.
 """
 
 import json
@@ -269,6 +272,66 @@ def _check_model_rates(failures):
             failures.append(f"rates for {model_id!r}: {got!r} != {expected!r}")
 
 
+def _check_parse_ts_bad_value(failures):
+    # cost.py lines 54-55: _parse_ts returns None on a malformed ISO-8601 string.
+    from statusline_lib.cost import _parse_ts
+
+    cases = [
+        (None, "None input"),
+        (12345, "non-string input"),
+        ("not-a-date", "garbage string"),
+        ("", "empty string"),
+    ]
+    for value, label in cases:
+        result = _parse_ts(value)
+        if result is not None:
+            failures.append(
+                f"_parse_ts({value!r}) ({label}) should return None; got {result!r}"
+            )
+
+
+def _check_walk_skips_junk_lines(failures):
+    # End to end through walk_transcript over a transcript that mixes a bad-JSON
+    # line (cost.py 172-173: skipped silently), a non-assistant entry (line 109:
+    # skipped), and a snapshot-duplicated assistant turn (line 115: the repeated
+    # message.id counts once). Only the d1 turn's tokens may land in the totals.
+    lines = [
+        "{ not valid json",
+        '{"message": {"role": "user", "id": "u1", "content": "hello"}}',
+        _turn("d1", read=0, write=0, inp=10, out=100),
+        _turn("d1", read=0, write=0, inp=10, out=100),  # snapshot duplicate
+    ]
+    tmp = tempfile.mkdtemp(prefix="cost-junk-")
+    parent = os.path.join(tmp, "sess.jsonl")
+    _write_jsonl(parent, lines)
+
+    walk = walk_transcript(parent, include_subagents=True)
+
+    if walk["input"] != 10 or walk["output"] != 100:
+        failures.append(
+            f"junk/duplicate lines must count d1 once: input={walk['input']}, "
+            f"output={walk['output']} (want 10, 100)"
+        )
+
+
+def _check_walk_one_transcript_oserror(failures):
+    # cost.py lines 175-178: OSError on file open is swallowed; acc is never
+    # touched, so an empty dict suffices (any field access would raise KeyError
+    # and fail this check).
+    from statusline_lib.cost import _walk_one_transcript
+
+    _walk_one_transcript("/nonexistent/dir/session.jsonl", {}, set())
+
+
+def _check_format_cache_zero_tokens(failures):
+    # costfmt.py line 63: format_cache returns "" when total_in (read+write+input) <= 0.
+    from statusline_lib.costfmt import format_cache
+
+    result = format_cache(0, 0, 0)
+    if result != "":
+        failures.append(f"format_cache(0, 0, 0) should return ''; got {result!r}")
+
+
 def check(failures):
     _check_model_rates(failures)
     _check_components_and_evictions(failures)
@@ -277,6 +340,10 @@ def check(failures):
     _check_ttl_threshold_derived_from_write(failures)
     _check_missing_timestamps_not_evicted(failures)
     _check_format_cache_render(failures)
+    _check_parse_ts_bad_value(failures)
+    _check_walk_skips_junk_lines(failures)
+    _check_walk_one_transcript_oserror(failures)
+    _check_format_cache_zero_tokens(failures)
 
 
 def main():
