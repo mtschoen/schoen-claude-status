@@ -9,8 +9,11 @@ Run from anywhere; imports from `schoen-claude-status` by path.
 """
 
 import contextlib
+import json
 import os
 import sys
+import tempfile
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import statusline_lib.burnrate as burnrate
@@ -242,6 +245,49 @@ def _check_spend_from_path_oserror(failures):
         )
 
 
+def _check_sum_window_spend_fixture(failures):
+    """Cover the real walk-and-sum path: a fixture root with one parsable
+    assistant turn plus a junk line sums to that turn's cost. CI runners have
+    no live ~/.claude transcripts, so this must not lean on the home dir."""
+    win_start = 1_700_000_000.0
+    ts = (
+        datetime.fromtimestamp(win_start + 60, tz=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    turn = json.dumps(
+        {
+            "timestamp": ts,
+            "message": {
+                "role": "assistant",
+                "id": "bw0",
+                "model": "claude-opus-4-8",
+                "usage": {"output_tokens": 1_000_000},
+            },
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "projects")
+        slug_dir = os.path.join(root, "slugb")
+        os.makedirs(slug_dir)
+        path = os.path.join(slug_dir, "sessb.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not json\n")  # exercises the parsed-is-None continue
+            f.write(turn + "\n")
+        os.utime(path, (win_start + 60, win_start + 60))
+
+        real_walker = burnrate._walker_root_list
+        burnrate._walker_root_list = lambda: [root]
+        try:
+            total = burnrate._sum_window_spend(win_start)
+        finally:
+            burnrate._walker_root_list = real_walker
+
+    # 1M output tokens on Opus 4.8 ($25/MTok output) = $25.
+    if abs(total - 25.0) > 1e-4:
+        failures.append(f"fixture walk should sum $25, got {total!r}")
+
+
 def _check_sum_window_spend_no_roots(failures):
     # burnrate.py line 88: _sum_window_spend returns 0.0 early when walker returns [].
     real_walker = burnrate._walker_root_list
@@ -308,6 +354,7 @@ def check(failures):
     _check_rate_number_colored_in_field(failures)
     _check_glyph_text_presentation(failures)
     _check_spend_from_path_oserror(failures)
+    _check_sum_window_spend_fixture(failures)
     _check_sum_window_spend_no_roots(failures)
     _check_window_spend_cache_write_oserror(failures)
     _check_day_field_no_budget(failures)

@@ -289,10 +289,12 @@ def _check_discover_pace_groups_oserror(failures):
 
 def _check_discover_pace_groups_subagent(failures):
     """Subagent transcripts (slug/session/subagents/agent-*.jsonl) group under
-    their parent session's (slug, session_id) key alongside the parent JSONL.
+    their parent session's (slug, session_id) key alongside the parent JSONL,
+    and files whose mtime predates the window are skipped (both globs).
     Fixture-only with pinned mtimes - must not depend on live ~/.claude data."""
     win_start = 1_700_000_000.0
     fresh = (win_start + 100, win_start + 100)
+    stale = (win_start - 100, win_start - 100)
 
     with tempfile.TemporaryDirectory() as tmp:
         root = os.path.join(tmp, "projects")
@@ -309,6 +311,16 @@ def _check_discover_pace_groups_subagent(failures):
         with open(agent_path, "w", encoding="utf-8") as f:
             f.write("")
         os.utime(agent_path, fresh)
+
+        # Too-old siblings in BOTH glob shapes: must be mtime-filtered out.
+        stale_parent = os.path.join(slug_dir, "old.jsonl")
+        with open(stale_parent, "w", encoding="utf-8") as f:
+            f.write("")
+        os.utime(stale_parent, stale)
+        stale_agent = os.path.join(sub_dir, "agent-old.jsonl")
+        with open(stale_agent, "w", encoding="utf-8") as f:
+            f.write("")
+        os.utime(stale_agent, stale)
 
         groups = pace._discover_pace_groups([root], win_start)
 
