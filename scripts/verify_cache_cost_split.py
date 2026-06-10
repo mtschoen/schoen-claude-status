@@ -250,7 +250,27 @@ def _check_format_cache_render(failures):
         )
 
 
+def _check_model_rates(failures):
+    # Fable 5 bills $10/$50 per MTok (platform.claude.com models overview).
+    # Before the fable row existed, _rates_for fell back to sonnet ($3/$15)
+    # and every fable session under-estimated cost 3.33x.
+    from statusline_lib.cost import _rates_for
+
+    cases = [
+        ("claude-fable-5", (10.0, 50.0)),
+        ("claude-fable-5[1m]", (10.0, 50.0)),
+        ("claude-opus-4-8", (5.0, 25.0)),
+        ("claude-haiku-4-5", (1.0, 5.0)),
+        ("totally-unknown-model", (3.0, 15.0)),  # sonnet fallback
+    ]
+    for model_id, expected in cases:
+        got = _rates_for(model_id)
+        if got != expected:
+            failures.append(f"rates for {model_id!r}: {got!r} != {expected!r}")
+
+
 def check(failures):
+    _check_model_rates(failures)
     _check_components_and_evictions(failures)
     _check_subagent_evictions_excluded(failures)
     _check_small_gap_not_evicted(failures)
