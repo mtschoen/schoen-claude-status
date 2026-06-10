@@ -1,7 +1,8 @@
-"""Verify install.py's nudge-hook merge: sentinel-based identity that survives
-a script rename, basename migration of pre-sentinel entries, stale-duplicate
-removal, empty-group pruning, in-place update, fresh insert, and the
-already-current check rejecting settings with leftovers.
+"""Verify the nudge-hook settings merge (statusline_lib.nudge_install, wired
+in by install.py): sentinel-based identity that survives a script rename,
+basename migration of pre-sentinel entries, stale-duplicate removal,
+empty-group pruning, in-place update, fresh insert, and the already-current
+check rejecting settings with leftovers.
 
 Pure in-memory checks against the merge helpers -- no settings.json is read or
 written. Run from anywhere.
@@ -12,7 +13,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from install import (
+from statusline_lib.nudge_install import (
     _NUDGE_SENTINEL,
     _merge_nudge_hook,
     _nudge_command,
@@ -25,7 +26,9 @@ MARKERS = _nudge_markers(TARGET)
 # An entry written by an older install, before a hypothetical script rename:
 # different filename and body, same sentinel. Recognizing this WITHOUT any
 # list of historical filenames is the property the sentinel exists for.
-RENAMED_COMMAND = f'python3 "/repo/some_long_forgotten_name.py" || true {_NUDGE_SENTINEL}'
+RENAMED_COMMAND = (
+    f'python3 "/repo/some_long_forgotten_name.py" || true {_NUDGE_SENTINEL}'
+)
 # An entry written by an install from before the sentinel existed: current
 # filename, no sentinel. Matched via the basename marker and migrated.
 PRE_SENTINEL_COMMAND = 'python3 "/repo/wrap_nudge.py" || true'
@@ -47,7 +50,8 @@ def _settings_with(*commands):
 def _nudge_commands(settings):
     """Every UserPromptSubmit command recognized as ours, in order."""
     found = []
-    for group in settings.get("hooks", {}).get("UserPromptSubmit", []):
+    hook_groups = settings.get("hooks", {})
+    for group in hook_groups.get("UserPromptSubmit", []):
         for hook in group.get("hooks", []):
             command = hook.get("command") or ""
             if any(marker in command for marker in MARKERS):
@@ -125,7 +129,9 @@ def _check_shared_group_preserved(failures):
     _merge_nudge_hook(settings, MARKERS, COMMAND)
     groups = settings["hooks"]["UserPromptSubmit"]
     if len(groups) != 2 or groups[1]["hooks"] != [OTHER_HOOK]:
-        failures.append(f"shared group: unrelated hook lost or group pruned: {groups!r}")
+        failures.append(
+            f"shared group: unrelated hook lost or group pruned: {groups!r}"
+        )
     if _nudge_commands(settings) != [COMMAND]:
         failures.append(
             f"shared group: stale entry should be gone, got {_nudge_commands(settings)!r}"

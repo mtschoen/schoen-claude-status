@@ -1,23 +1,31 @@
 # schoen-claude-status - Test Report
 
-`2026-06-02T11:00:00Z`
+`2026-06-10`
 
 | Field | Value |
 |-------|-------|
 | **Status** | PASS |
-| **Mode** | best-effort (feature: statusline cost-observability fields) |
-| **Tests** | 17 `scripts/verify_*.py`, all passing |
-| **Git** | `6219507` (feat/statusline-cost-observability) |
+| **Mode** | maintain (lint); coverage informational |
+| **Tests** | 23 `scripts/verify_*.py`, all passing |
+| **Git** | `06e24ce` (main, working tree includes the nudge_install move) |
 
-**Mode detail:** line coverage is *best-effort* (never instrumented as a gate; this
-feature covered the code it added, baseline newly established below). Lint is
-*maintain* (held at the 0-findings / 100-score hard bar).
+**Mode detail:** lint is *maintain* (held at the 0-findings / 100-score hard
+bar; this run restored it after commit 8b0ad4a briefly dropped aislop to 78).
+Line coverage remains *best-effort* / informational (baseline below is the
+2026-06-02 one-shot measurement, not re-run).
 
-**Tests added or extended by this feature:** `verify_compact_mode.py` (new: env
-modes, `$COLUMNS` auto-drop order, unset fallback, protected-field invariants),
-`verify_cache_cost_split.py`, `verify_ttl_evictions.py`, plus extended
-`verify_burn_rate.py` (target-rate arrow) and `verify_quota_render.py`
-(`show_pace` toggle).
+**This run:** restored the gate by restructuring, not suppressing. The nudge
+hook merge helpers (`_NUDGE_SENTINEL`, `_nudge_command`, `_nudge_markers`,
+`_find_nudge_hooks`, `_nudge_hook_current`, `_merge_nudge_hook`) moved from
+install.py into the new `statusline_lib/nudge_install.py`, so
+`verify_install_nudge_merge.py` imports a recognized local package like every
+sibling script - clearing the `ai-slop/hallucinated-import` false positive on
+the repo-local `import install` (aislop resolves local package dirs with
+`__init__.py` but not single-file modules). The chained `.get(..., {})`
+lookup was split into explicit steps (`python-chained-dict-get`), and the
+ruff format drift was reformatted away. `nudge_install.py` is fully exercised
+by `verify_install_nudge_merge.py` but is not in the coverage table below
+(predates it).
 
 ## Lint (hard gate)
 
@@ -103,4 +111,4 @@ python -m coverage report -m --include="statusline_lib/*"
 | **Config** | `pyproject.toml` (`[tool.ruff]`), `.aislop/config.yml` |
 | **Rollout doc** | `LINTER-SETUP.md` |
 | **CI** | `.gitea/workflows/ci.yml` - ruff + aislop hard gates; pyright + shellcheck non-blocking |
-| **Package** | `statusline_lib/` (base, sessions, walker, cost, beacon, pace, badge, compact, qwen, nudge, project, `__init__`) |
+| **Package** | `statusline_lib/` (base, sessions, walker, cost, beacon, pace, badge, compact, qwen, nudge, nudge_install, project, `__init__`) |
