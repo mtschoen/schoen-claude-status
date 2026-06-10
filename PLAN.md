@@ -2,7 +2,10 @@
 
 ## Inbox
 
-(empty)
+- [ ] Fix red quality gate: ruff format drift + 2 aislop findings
+      (hallucinated-import for repo-local `import install`, chained-dict-get)
+      in scripts/verify_install_nudge_merge.py; `npm run lint:aislop` scores
+      78 and exits non-zero. Introduced by 8b0ad4a.
 
 ## Done
 
