@@ -112,6 +112,17 @@ def _qwen_command_for_platform(repo):
     return target, command
 
 
+# Stable identity stamp for our hook entry, appended to the command string as
+# a shell comment (`#` starts a comment in both POSIX sh and PowerShell, the
+# two shells Claude Code runs hook commands through, so it never affects
+# execution). The installer recognizes its own entry by this sentinel rather
+# than by the script's filename, so the script can be renamed or moved freely
+# without orphaning entries written by earlier installs (which is what
+# happened with the nudge_200k.py -> wrap_nudge.py rename). Treat the sentinel
+# text itself as frozen: changing it recreates the very problem it solves.
+_NUDGE_SENTINEL = "#managed-by:schoen-claude-status/wrap-nudge"
+
+
 def _nudge_command(repo):
     """Shell-aware command for the UserPromptSubmit wrap nudge hook.
 
@@ -128,42 +139,59 @@ def _nudge_command(repo):
     pwsh 7 and Windows PowerShell 5.1, neither of which needs `||`)."""
     target = f"{repo}/wrap_nudge.py"
     if os.name == "nt":
-        command = f'py -3 "{target}" 2>>"$HOME\\.claude\\wrap_nudge_hook.log"; exit 0'
+        command = f'py -3 "{target}" 2>>"$HOME\\.claude\\wrap_nudge_hook.log"; exit 0 {_NUDGE_SENTINEL}'
     else:
-        command = f'python3 "{target}" 2>>"$HOME/.claude/wrap_nudge_hook.log" || true'
+        command = f'python3 "{target}" 2>>"$HOME/.claude/wrap_nudge_hook.log" || true {_NUDGE_SENTINEL}'
     return target, command
 
 
-# Substring that identifies our hook entry among any other UserPromptSubmit
-# hooks the user has configured, so install updates ours in place.
-_NUDGE_MARKER = "wrap_nudge.py"
+def _nudge_markers(target):
+    """Substrings that identify our hook entry among any other UserPromptSubmit
+    hooks the user has configured. The sentinel is the durable identity; the
+    current script basename is matched as well so an entry written by an
+    install that predates the sentinel is migrated in place instead of
+    duplicated. The basename is derived fresh from `target` on every run --
+    deliberately NOT a maintained list of historical filenames."""
+    return (_NUDGE_SENTINEL, os.path.basename(target))
 
 
-def _find_nudge_hook(settings):
-    """Return our existing UserPromptSubmit nudge hook dict, or None."""
+def _find_nudge_hooks(settings, markers):
+    """Return every (group, hook) pair recognized as our nudge entry, in
+    registration order."""
+    found = []
     for group in (settings.get("hooks") or {}).get("UserPromptSubmit") or []:
         for hook in group.get("hooks") or []:
-            if _NUDGE_MARKER in (hook.get("command") or ""):
-                return hook
-    return None
+            hook_command = hook.get("command") or ""
+            if any(marker in hook_command for marker in markers):
+                found.append((group, hook))
+    return found
 
 
-def _nudge_hook_current(settings, command):
-    """True iff our nudge hook is already present with exactly `command`."""
-    hook = _find_nudge_hook(settings)
-    return bool(hook) and hook.get("command") == command
+def _nudge_hook_current(settings, markers, command):
+    """True iff exactly one nudge hook is present (no stale leftovers from an
+    older install) and it already has exactly `command`."""
+    matches = _find_nudge_hooks(settings, markers)
+    return len(matches) == 1 and matches[0][1].get("command") == command
 
 
-def _merge_nudge_hook(settings, command):
+def _merge_nudge_hook(settings, markers, command):
     """Insert or update the nudge hook, preserving every other hook entry.
-    Updates ours in place if present, else appends a new matcher group."""
-    existing = _find_nudge_hook(settings)
-    if existing is not None:
-        existing["type"] = "command"
-        existing["command"] = command
+    Updates the first match in place, removes any further matches (stale
+    entries from an older install, or accidental duplicates), and drops
+    matcher groups that removal left empty."""
+    matches = _find_nudge_hooks(settings, markers)
+    if not matches:
+        groups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+        groups.append({"hooks": [{"type": "command", "command": command}]})
         return
-    groups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-    groups.append({"hooks": [{"type": "command", "command": command}]})
+    matches[0][1]["type"] = "command"
+    matches[0][1]["command"] = command
+    for group, hook in matches[1:]:
+        group["hooks"].remove(hook)
+    emptied_ids = {id(group) for group, _ in matches[1:] if not group.get("hooks")}
+    if emptied_ids:
+        groups = settings["hooks"]["UserPromptSubmit"]
+        groups[:] = [group for group in groups if id(group) not in emptied_ids]
 
 
 def _report_walker(repo):
@@ -232,6 +260,7 @@ def _install_claude(repo, dry_run):
         _commands_for_platform(repo)
     )
     nudge_target, nudge_command = _nudge_command(repo)
+    nudge_markers = _nudge_markers(nudge_target)
 
     for script in (main_target, subagent_target, nudge_target):
         if not os.path.exists(script):
@@ -259,7 +288,7 @@ def _install_claude(repo, dry_run):
     already_current = (
         settings.get("statusLine") == desired_statusline
         and settings.get("subagentStatusLine") == desired_subagent
-        and _nudge_hook_current(settings, nudge_command)
+        and _nudge_hook_current(settings, nudge_markers, nudge_command)
     )
 
     if already_current:
@@ -275,7 +304,7 @@ def _install_claude(repo, dry_run):
 
     settings["statusLine"] = desired_statusline
     settings["subagentStatusLine"] = desired_subagent
-    _merge_nudge_hook(settings, nudge_command)
+    _merge_nudge_hook(settings, nudge_markers, nudge_command)
 
     if dry_run:
         print(f"# would write to {settings_path}")
